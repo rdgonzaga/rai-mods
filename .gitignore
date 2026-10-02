@@ -1,0 +1,9 @@
+# Written by Claude Code each time a mod loads from --plugin-dir
+.claude-plugin/types/
+plugins/*/.claude-plugin/types/
+plugins/*/tsconfig.json
+
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store

@@ -1,0 +1,66 @@
+# rai-hud
+
+A terminal-ops HUD for Claude Code. It makes no model calls and adds nothing to what Claude reads, so it costs zero tokens. The only text Claude ever sees from it is the reason when you deny a guard prompt.
+
+Built to sit next to [ccstatusline](https://github.com/sirmalloc/ccstatusline), so it skips what that already shows (cwd, branch, context, model).
+
+## What you get
+
+**Mascot.** A hooded pixel hacker at a monitor that reacts to what Claude is doing:
+
+| State | When |
+| --- | --- |
+| THINKING | a turn starts |
+| SCANNING | Read, Glob, Grep, web fetches |
+| EDITING | Edit, Write |
+| EXEC | Bash, PowerShell |
+| ALERT | a guard is asking you |
+| DONE / STOPPED | the turn ended / was interrupted |
+| LEVELUP | you crossed an XP level |
+| SLEEP | idle for 2 minutes |
+
+It scales to the sidebar (2x from 56 columns) and drops to a one-line face when there's no room.
+
+**Sidebar tabs**
+
+1. **tasks**: Claude's current plan
+2. **files**: files changed this session with `+/-` line counts. `⧉` copies the path
+3. **cmds**: last 8 shell commands with ✓ / ✗ / ⊘
+4. **git**: ahead/behind, stashes, unpushed commits. `f` fetches
+5. **ci**: the branch's PR, review state and checks via `gh`. `o` opens, `r` refreshes
+6. **ports**: dev servers listening locally. `↗` opens in the browser
+
+**Guards.** These hold the tool call and ask Authorize / Deny:
+
+- **git guard**: push, force push, `reset --hard`, `clean -f`, commits on main/master
+- **secret guard**: writes containing known key formats (AWS, GitHub, Anthropic, OpenAI, Stripe live, Google, Slack, Resend, private keys, DB URLs with passwords, Supabase service-role JWTs), or the real values from the repo's `.env*` files. Shell commands only trip on the real `.env` values.
+
+Both skip `claude -p` runs, so scripts never hang on a dialog.
+
+**XP and levels.** Each finished turn gives 5 XP + 1 per tool call + 3 per file edited. Ten titles from *script kiddie* to *the architect*, and hood colors unlock at levels 3, 5, 7 and 9. Saved across sessions.
+
+**Sounds.** Chime when a 15s+ turn finishes, siren on guard prompts, fanfare on level up. On Windows they play through PowerShell, since `$.audio` has no player there. Regenerate them with `python sounds/make_sounds.py`.
+
+**Night mode.** Midnight to 5am: coffee mug, tired eyes, and a red `go to sleep` line.
+
+**Also:** the spinner shows `▸ exec:4 wr:1` for the current turn, and the band above the prompt shows the last turn's stats.
+
+## Keys and commands
+
+| | |
+| --- | --- |
+| `Ctrl+↑` / `Ctrl+↓` | previous / next tab, from the prompt |
+| `Ctrl+X` `Tab` | focus the sidebar; then `1`-`6` pick a tab |
+| `/hud` | show or hide the sidebar |
+| `/hud files` (or `git`, `ci`, `3`…) | jump to a tab |
+| `/hud mute` | toggle sounds |
+
+The sidebar opens by itself in terminals 144+ columns wide. In a narrower one the mascot rides in the band until your first prompt, which places the sidebar at any width.
+
+## Files
+
+- `hooks/register.js`: events, sidebar, guards
+- `hooks/sprite.js`: the pixel art. Run `node preview.mjs` to see every state
+- `hooks/scan.js`: secret patterns and port parsing
+- `sounds/`: WAV effects and the script that makes them
+- `tests/`: `claude plugin test`

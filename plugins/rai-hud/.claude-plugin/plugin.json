@@ -1,0 +1,6 @@
+{
+  "name": "rai-hud",
+  "version": "0.2.0",
+  "description": "Terminal-ops HUD: an animated pixel hacker, a sidebar with tasks, files, commands, git, CI and ports, git and secret guards, XP levels, sounds, and night mode. Makes no model calls and adds nothing to Claude's context.",
+  "author": { "name": "Rainer Gonzaga" }
+}

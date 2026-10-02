@@ -1,0 +1,17 @@
+{
+  "name": "rai-mods",
+  "owner": {
+    "name": "Rainer Gonzaga"
+  },
+  "metadata": {
+    "description": "Claude Code mods by Rainer Gonzaga"
+  },
+  "plugins": [
+    {
+      "name": "rai-hud",
+      "source": "./plugins/rai-hud",
+      "description": "Terminal-ops HUD: an animated pixel hacker, a sidebar with tasks, files, commands, git, CI and ports, git and secret guards, XP levels, sounds, and night mode. Zero tokens.",
+      "version": "0.2.0"
+    }
+  ]
+}
