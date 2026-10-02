@@ -6,8 +6,9 @@
 // band, toast, and spinner suffix are drawn locally, and the git guard's `deny`
 // text is the only thing Claude ever sees (as a tool result, only when you block).
 
-import { WIDTH, ROWS, pixels, cellsOf, asSvg, scaleGrid, scaleFor, face } from './sprite.js'
+import { dims, pixels, cellsOf, asSvg, scaleGrid, scaleFor, face } from './sprite.js'
 import { findSecret, envValues, isSecretHome, mask, parseWindowsPorts, parseLsofPorts, portHint } from './scan.js'
+import { clip, baseName, relPathOf, tagFor, targetFor, detailFor, statusFor, groupSummary, verbFor, turnSummary } from './style.js'
 
 // ── Pane and mascot ────────────────────────────────────────────────────────
 const PANE = 'rai-hud'
@@ -32,6 +33,8 @@ let frame = 0
 let lastCells = ''
 // How the last render drew the mascot: scale 0 means it isn't on screen
 let spriteScale = 1
+// Which drawn size the pane uses: 'full' (60x36 px) or 'mini' (30x20 px)
+let spriteSize = 'full'
 
 const MOOD_COLOR = {
   IDLE: 'green',
@@ -46,6 +49,8 @@ const MOOD_COLOR = {
   STOPPED: 'red',
   SLEEP: 'gray',
   LEVELUP: 'yellow',
+  NET: 'magenta',
+  BOOT: 'green',
 }
 
 const MOOD_LINE = {
@@ -61,6 +66,8 @@ const MOOD_LINE = {
   STOPPED: 'op aborted',
   SLEEP: 'zZz',
   LEVELUP: 'LEVEL UP!',
+  NET: 'tracing packets',
+  BOOT: 'booting...',
 }
 
 // ── XP and levels ──────────────────────────────────────────────────────────
@@ -79,6 +86,17 @@ const TITLES = [
 ]
 let xp = 0
 let muted = false
+
+// ── Restyle of Claude Code's own rows ──────────────────────────────────────
+// `/hud style off` turns every restyle hook into a pass-through
+let styleOn = true
+// The turn number, so a turn keeps one spinner verb
+let turnSeq = 0
+// Finished turns, oldest first, for the turn-end lines: { tools, files, xpGain, aborted, error }
+const turnLog = []
+// Which turn record each TurnDuration row (by message id) shows
+const turnByMsg = new Map()
+let nextRecord = 0
 
 function xpFor(level) {
   return 25 * level * (level - 1)
@@ -122,11 +140,10 @@ let repoRoot = ''
 let envSecrets = []
 let branch = ''
 
-// The turn in progress, for the spinner and the band
+// The turn in progress, for the spinner and the turn-end line
 let busy = false
 let toolCalls = 0
 let turnFiles = new Set()
-let last = null
 
 // ── Sidebar data ───────────────────────────────────────────────────────────
 // 1: Claude's plan, from its task tools. { key, subject, status }
@@ -144,20 +161,12 @@ let ports = []
 
 // ── Helpers (pure) ─────────────────────────────────────────────────────────
 function moodForTool(tool) {
+  if (tool === 'WebFetch' || tool === 'WebSearch') return 'NET'
   if (SCAN_TOOLS.includes(tool)) return 'SCANNING'
   if (EDIT_TOOLS.includes(tool)) return 'EDITING'
   if (SHELL_TOOLS.includes(tool)) return 'EXEC'
   if (tool === 'Agent') return 'SPAWNING'
   return 'WORKING'
-}
-
-function clip(s, n) {
-  s = String(s).replace(/\s+/g, ' ').trim()
-  return s.length > n ? s.slice(0, n - 1) + '…' : s
-}
-
-function baseName(p) {
-  return String(p).split(/[\\/]/).pop()
 }
 
 function targetOf(e) {
@@ -166,11 +175,9 @@ function targetOf(e) {
   return clip(/[\\/]/.test(s) && !/\s/.test(s) ? baseName(s) : s, 22)
 }
 
-// Path relative to the repo root, with forward slashes; lowercased key for matching
+// Path relative to the repo root, with forward slashes
 function relPath(abs) {
-  const norm = String(abs).replace(/\\/g, '/')
-  const root = repoRoot.replace(/\\/g, '/').replace(/\/+$/, '')
-  return root && norm.toLowerCase().startsWith(root.toLowerCase() + '/') ? norm.slice(root.length + 1) : norm
+  return relPathOf(abs, repoRoot)
 }
 
 // The ci tab's badge: ✓, ✗2, or … while checks run
@@ -181,10 +188,6 @@ function ciBadge() {
   if (fail) return ' ✗' + fail
   if (pend) return ' …'
   return ci.checks.length ? ' ✓' : ' #' + ci.pr.number
-}
-
-function fmtTokens(n) {
-  return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n)
 }
 
 function clock(ms) {
@@ -312,11 +315,12 @@ async function tick($) {
   }
   if (!spriteScale) return
   const k = spriteScale
-  const cells = cellsOf(scaleGrid(pixels(mood, frame, { level: levelOf(xp), night: isNight() }), k))
+  const d = dims(spriteSize)
+  const cells = cellsOf(scaleGrid(pixels(mood, frame, { size: spriteSize, level: levelOf(xp), night: isNight() }), k))
   if (cells === lastCells) return
   lastCells = cells
   try {
-    await $.ui.blit({ requestId: PANE, key: 'mascot', columns: WIDTH * k, rows: ROWS * k, cells })
+    await $.ui.blit({ requestId: PANE, key: 'mascot', columns: d.width * k, rows: d.rows * k, cells })
   } catch {
     // Not mounted yet (desktop, or the pane is waiting for room)
   }
@@ -466,6 +470,7 @@ async function loadProfile($) {
   try {
     xp = Number((await $.store.get('xp')) ?? 0) || 0
     muted = (await $.store.get('muted')) === true
+    styleOn = (await $.store.get('style')) !== false
   } catch {
     // No store yet
   }
@@ -487,13 +492,13 @@ async function awardXp($, amount) {
 }
 
 // Hold a tool call while the user decides; resolves true to let it run
-async function confirm($, question, labels) {
+async function confirm($, question, labels, header) {
   const before = mood
   play($, 'alert')
   await setMood($, 'ALERT')
   let answer = labels[1]
   try {
-    answer = await $.ui.ask(question, labels)
+    answer = await $.ui.ask(question, header ? { options: labels, header } : labels)
   } catch {
     // Dismissed: treat as refused
   }
@@ -501,12 +506,26 @@ async function confirm($, question, labels) {
   return answer === labels[0]
 }
 
+// The largest mascot that fits: the full scene, else the mini one, each scaled
+// up while there's width, and kept under ~45% of the window's height
+function pickSprite(width, windowRows, inline) {
+  if (inline && windowRows < 20) return { size: 'mini', k: 0 }
+  for (const size of ['full', 'mini']) {
+    const d = dims(size)
+    if (width < d.width) continue
+    let k = scaleFor(width, inline ? 1 : 3, size)
+    while (k > 1 && d.rows * k > windowRows * 0.45) k -= 1
+    if (d.rows * k <= Math.max(windowRows * 0.45, inline ? 10 : 0)) return { size, k }
+  }
+  return { size: 'mini', k: 0 }
+}
+
 async function openPane($) {
   paneOpen = true
   userClosed = false
   lastCells = ''
   try {
-    const res = await $.ui.open({ id: PANE, title: 'rai//hud', columns: 60, rows: 24 })
+    const res = await $.ui.open({ id: PANE, title: 'rai//hud', columns: 62, rows: 30 })
     placed = !!(res && res.isPlaced)
   } catch {
     placed = false
@@ -527,7 +546,9 @@ export function register(on) {
     await loadProfile($)
     if (interactive) {
       $.ui.toast('[+] rai-hud online :: git-guard ARMED')
-      lastActivity = await $.clock.now()
+      // A short boot animation, then idle
+      frame = 0
+      await setMood($, 'BOOT', 2500)
       $.clock.every(FRAME_MS, () => tick($))
       $.clock.every(GIT_POLL_MS, () => pollGit($))
       $.clock.every(CI_POLL_MS, () => pollCi($))
@@ -541,7 +562,7 @@ export function register(on) {
         await $.command.register({
           name: 'hud',
           description: 'Toggle the rai-hud sidebar, or jump to a tab',
-          argumentHint: '[tasks|files|cmds|git|ci|ports|mute]',
+          argumentHint: '[tasks|files|cmds|git|ci|ports|mute|style]',
           immediate: true,
         })
       } catch {
@@ -562,6 +583,17 @@ export function register(on) {
         // Keep it for this session at least
       }
       $.ui.toast(muted ? '[-] rai-hud sounds off' : '[+] rai-hud sounds on')
+      return {}
+    }
+    if (arg === 'style' || arg === 'style on' || arg === 'style off') {
+      styleOn = arg === 'style' ? !styleOn : arg === 'style on'
+      try {
+        await $.store.set('style', styleOn)
+      } catch {
+        // Keep it for this session at least
+      }
+      $.ui.invalidate('ui.render')
+      $.ui.toast(styleOn ? '[+] hacker restyle on' : '[-] hacker restyle off')
       return {}
     }
     const pick = TABS.find((t, i) => arg && (t.startsWith(arg) || arg === String(i + 1)))
@@ -601,6 +633,7 @@ export function register(on) {
   // Main-loop turns only: subagent runs raise no turn.start
   on('turn.start', async ($, e, next) => {
     busy = true
+    turnSeq += 1
     toolCalls = 0
     turnFiles = new Set()
     target = ''
@@ -612,15 +645,14 @@ export function register(on) {
     const result = await next(e)
     if (e.agentId) return result
     busy = false
-    const u = e.usage
-    last = {
-      tools: toolCalls,
-      files: turnFiles.size,
-      tokens: u ? (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) : 0,
-      aborted: e.isAborted,
-    }
     const failed = e.isAborted || e.reason === 'error'
-    const leveled = failed || !interactive ? 0 : await awardXp($, xpForTurn(toolCalls, turnFiles.size))
+    const gain = failed || !interactive ? 0 : xpForTurn(toolCalls, turnFiles.size)
+    const leveled = gain ? await awardXp($, gain) : 0
+    turnLog.push({ tools: toolCalls, files: turnFiles.size, xpGain: gain, aborted: !!e.isAborted, error: e.reason === 'error' })
+    if (turnLog.length > 200) {
+      turnLog.shift()
+      nextRecord = Math.max(0, nextRecord - 1)
+    }
     if (leveled) {
       await setMood($, 'LEVELUP', 6000)
       $.ui.toast('[+] LEVEL UP :: LVL ' + leveled + ' ' + titleOf(leveled), { timeoutMs: 6000 })
@@ -687,6 +719,7 @@ export function register(on) {
       $,
       '[!] GIT-GUARD :: ' + risk + ' intercepted >> `' + e.command.slice(0, 200) + '` :: authorize?',
       ['Authorize', 'Deny'],
+      'GIT-GUARD',
     )
     if (!ok) {
       return { deny: 'The user blocked this git command (' + risk + ') via the git guard. Do not retry it; ask the user how to proceed.' }
@@ -711,6 +744,7 @@ export function register(on) {
       $,
       '[!] SECRET-GUARD :: ' + hit.label + ' (' + mask(hit.match) + ') headed for ' + where + ' :: authorize?',
       ['Authorize', 'Deny'],
+      'SECRET',
     )
     if (!ok) {
       return {
@@ -724,12 +758,116 @@ export function register(on) {
     return { deny: 'The secret guard failed, so this was not run. Ask the user how to proceed.' }
   })
 
-  // Spinner: "Thinking ▸ exec:4 wr:1…" (Claude Code's spinner already shows time)
+  // Spinner: "Injecting ▸ exec:4 wr:1…" (Claude Code's spinner already shows time).
+  // The word becomes a hacker verb for the mood, in the terminal, unless
+  // Claude Code is showing a message of its own.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     if (!busy) return next(e)
     let suffix = ' ▸ exec:' + toolCalls
     if (turnFiles.size) suffix += ' wr:' + turnFiles.size
-    return next({ ...e, props: { ...e.props, suffix: suffix + '…' } })
+    const props = { ...e.props, suffix: suffix + '…' }
+    if (styleOn && e.surface === 'terminal' && e.props.message == null) props.word = verbFor(mood, turnSeq)
+    return next({ ...e, props })
+  })
+
+  // ── Restyle: Claude Code's own rows ──────────────────────────────────────
+
+  // A tool call's header: "[EDIT] src/auth.ts  +12 -3  ✓". Claude Code still
+  // draws the result (diff, output) under it, as its own ToolResult row.
+  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    if (!styleOn) return next(e)
+    const p = e.props
+    if (p.tool === 'AskUserQuestion') return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const [tag, color] = tagFor(p.tool)
+    const [mark, markColor] = statusFor(p)
+    const detail = p.isRunning ? '' : detailFor(p.tool, p.output)
+    const room = Math.max(16, ((e.viewport && e.viewport.columns) || 100) - 24 - detail.length)
+    return Box({
+      flexDirection: 'row',
+      columnGap: 1,
+      children: [
+        Text({ color, bold: true, children: ['[' + tag + ']'] }),
+        Text({ wrap: 'truncate', children: [clip(targetFor(p.tool, p.input, repoRoot), room)] }),
+        ...(detail ? [Text({ dimColor: true, children: [detail] })] : []),
+        Text({ color: markColor, bold: true, children: [mark] }),
+      ],
+    })
+  })
+
+  // A folded run of reads and searches: "[SCAN] 3 reads · 2 greps  ✓"
+  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
+    if (!styleOn || e.props.isExpanded) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const calls = e.props.calls || []
+    const running = e.props.isActive && calls.some((c) => c.isRunning)
+    const errored = calls.some((c) => c.isErrored)
+    const [mark, markColor] = running ? ['…', 'yellow'] : errored ? ['✗', 'red'] : ['✓', 'green']
+    return Box({
+      flexDirection: 'row',
+      columnGap: 1,
+      children: [
+        Text({ color: 'cyan', bold: true, children: ['[SCAN]'] }),
+        Text({ wrap: 'truncate', children: [groupSummary(calls)] }),
+        Text({ color: markColor, bold: true, children: [mark] }),
+      ],
+    })
+  })
+
+  // Claude's reply: a [rai]> tag on its first block; the markdown is untouched
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    if (!styleOn || !e.props.isFirstOfReply || !e.props.text) return next(e)
+    return next({ ...e, props: { ...e.props, text: '`[rai]>` ' + e.props.text } })
+  })
+
+  // Your prompt, as a shell line: "rai@hud:~$ fix the auth bug"
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    if (!styleOn || !e.props.origin || e.props.origin.kind !== 'composer') return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return Box({
+      flexDirection: 'row',
+      columnGap: 1,
+      children: [Text({ color: 'green', bold: true, children: ['rai@hud:~$'] }), Text({ children: [e.props.text] })],
+    })
+  })
+
+  // The line that closes a turn: "[OK] op complete :: 41s · exec:6 · wr:2 · +18 XP"
+  on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
+    if (!styleOn) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    let record = turnByMsg.get(e.requestId)
+    if (!record && nextRecord < turnLog.length) {
+      record = turnLog[nextRecord]
+      nextRecord += 1
+      turnByMsg.set(e.requestId, record)
+    }
+    const line = turnSummary(record, e.props.durationMs)
+    return Box({
+      flexDirection: 'row',
+      columnGap: 1,
+      children: [
+        Text({ color: line.color, bold: true, children: [line.label] }),
+        Text({ color: line.color, dimColor: true, wrap: 'truncate', children: [line.text] }),
+      ],
+    })
+  })
+
+  // The hint line under the prompt: Claude Code's line, plus your level
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    if (!styleOn || e.props.isWorking || e.props.isDraft) return next(e)
+    return next({ ...e, props: { ...e.props, tail: ' · LVL ' + levelOf(xp) + ' · /hud' } })
+  })
+
+  // The footer's mode labels: say the guards are watching
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (!styleOn || !interactive) return next(e)
+    return next({ ...e, props: { ...e.props, modes: [...(e.props.modes || []), 'guards armed'] } })
+  })
+
+  // Status notices under the logo
+  on('ui.render', { component: 'InfoNotice' }, async ($, e, next) => {
+    if (!styleOn || !e.props.text || e.props.text.startsWith('[i] ')) return next(e)
+    return next({ ...e, props: { ...e.props, text: '[i] ' + e.props.text } })
   })
 
   // The sidebar: mascot, readout, tabs, and the open tab's panel
@@ -742,27 +880,26 @@ export function register(on) {
     const narrow = width < 46
     const color = MOOD_COLOR[mood] || 'green'
     const redraw = () => $.ui.invalidate('ui.render')
-    const grid = pixels(mood, frame, { level: levelOf(xp), night: isNight() })
 
-    // Size the mascot to the sidebar. Beside the transcript it scales to the
-    // width (2x from 56 columns); above the prompt in a short terminal there's
-    // no room for it, so a one-line face stands in.
+    // Size the mascot to the sidebar: the full scene from 60 columns (2x from
+    // 120), the mini scene from 30, else a one-line face. Short windows step down.
     const windowRows = (e.viewport && e.viewport.rows) || 40
     const inline = props.placement === 'inline'
-    if (e.surface !== 'terminal') spriteScale = 1
-    else if (width < WIDTH || (inline && windowRows < 20)) spriteScale = 0
-    else spriteScale = scaleFor(width, inline ? 1 : 3)
-    while (spriteScale > 1 && ROWS * spriteScale > windowRows * 0.45) spriteScale -= 1
+    const pick = e.surface !== 'terminal' ? { size: 'full', k: 1 } : pickSprite(width, windowRows, inline)
+    spriteSize = pick.size
+    spriteScale = pick.k
     const k = spriteScale
+    const d = dims(spriteSize)
+    const grid = pixels(mood, frame, { size: spriteSize, level: levelOf(xp), night: isNight() })
     let sprite = null
     if (e.surface !== 'terminal') {
       const px = Math.min(420, width * 8)
-      sprite = Svg({ source: asSvg(grid), alt: 'rai-hud mascot: ' + mood, width: px, height: Math.round((px * 18) / 28) })
+      sprite = Svg({ source: asSvg(grid), alt: 'rai-hud mascot: ' + mood, width: px, height: Math.round((px * d.height) / d.width) })
     } else if (k) {
-      const pad = Math.max(0, Math.floor((width - WIDTH * k) / 2))
+      const pad = Math.max(0, Math.floor((width - d.width * k) / 2))
       sprite = Box({
         paddingLeft: pad,
-        children: [Raster({ key: 'mascot', columns: WIDTH * k, rows: ROWS * k, cells: cellsOf(scaleGrid(grid, k)) })],
+        children: [Raster({ key: 'mascot', columns: d.width * k, rows: d.rows * k, cells: cellsOf(scaleGrid(grid, k)) })],
       })
     }
 
@@ -1082,13 +1219,13 @@ export function register(on) {
     })
   })
 
-  // Band above the prompt: "rai@hud:~$ last_op ▸ exec:6 wr:2 rx:18.2k [OK]"
-  // Empty until the first turn ends
+  // Band above the prompt: the mascot while the sidebar isn't on screen, and
+  // the night warning. Last-turn stats live on the turn-end line now.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const night = isNight()
     // While the sidebar isn't on screen, the mascot rides in the band instead
     const mini = interactive && !placed && !userClosed
-    if (!last && !night && !mini) return next(e)
+    if (!night && !mini) return next(e)
     const { Box, Text } = $.ui.resolve(e)
     if (mini) {
       const c = MOOD_COLOR[mood] || 'green'
@@ -1099,40 +1236,15 @@ export function register(on) {
         Text({ color: 'yellow', children: ['LVL ' + levelOf(xp)] }),
       ]
       if (night) parts.push(Text({ color: 'red', bold: true, children: [nightLine()] }))
-      if (!last) parts.push(Text({ dimColor: true, wrap: 'truncate', children: ['· sidebar opens on your first prompt'] }))
+      if (!turnLog.length) parts.push(Text({ dimColor: true, wrap: 'truncate', children: ['· sidebar opens on your first prompt'] }))
       const rows = [Box({ flexDirection: 'row', columnGap: 1, children: parts })]
-      if (last) rows.push(bandRow(Box, Text))
       const rest = await next(e)
       if (rest) rows.push(rest)
       return rows.length === 1 ? rows[0] : Box({ flexDirection: 'column', children: rows })
     }
-    if (!last) {
-      const rest = await next(e)
-      const warn = Text({ color: 'red', bold: true, children: [nightLine()] })
-      return rest ? Box({ flexDirection: 'column', children: [warn, rest] }) : warn
-    }
-    const row = bandRow(Box, Text, night)
     // Keep anything other mods draw in the band
     const rest = await next(e)
-    return rest ? Box({ flexDirection: 'column', children: [row, rest] }) : row
-  })
-}
-
-// The band's last-turn row: "rai@hud:~$ last_op ▸ exec:6 wr:2 rx:18.2k [OK]"
-function bandRow(Box, Text, night) {
-  const stats = ['exec:' + last.tools]
-  if (last.files) stats.push('wr:' + last.files)
-  if (last.tokens) stats.push('rx:' + fmtTokens(last.tokens))
-  return Box({
-    flexDirection: 'row',
-    columnGap: 1,
-    children: [
-      Text({ color: 'green', bold: true, children: ['rai@hud:~$'] }),
-      Text({ color: 'green', dimColor: true, children: ['last_op ▸'] }),
-      Text({ color: 'green', wrap: 'truncate', children: [stats.join(' ')] }),
-      last.aborted
-        ? Text({ color: 'red', bold: true, children: ['[SIGINT]'] })
-        : Text({ color: 'green', bold: true, children: ['[OK]'] }),
-    ].concat(night ? [Text({ color: 'red', bold: true, children: [nightLine()] })] : []),
+    const warn = Text({ color: 'red', bold: true, children: [nightLine()] })
+    return rest ? Box({ flexDirection: 'column', children: [warn, rest] }) : warn
   })
 }

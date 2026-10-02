@@ -89,7 +89,7 @@ test('non-interactive runs skip the guard', async ($, on) => {
   expect(asked).toEqual([])
 })
 
-test('the band shows the last turn and nothing ccstatusline has', async ($, on) => {
+test('the band no longer repeats last-turn stats (the turn-end line has them)', async ($, on) => {
   setup(on, { branch: 'main' })
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -97,18 +97,13 @@ test('the band shows the last turn and nothing ccstatusline has', async ($, on) 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await $.turn.start({ text: 'hi', turnId: 't1' })
   await $.tool.call({ tool: 'Read', file_path: 'a.md' })
-  await $.tool.call({ tool: 'Edit', file_path: 'a.md' })
-  await $.turn.complete({
-    turnId: 't1', answer: 'ok', durationMs: 41000, isAborted: false, reason: 'answer',
-    usage: { input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 17000, cache_creation_input_tokens: 0, model: 'x' },
-  })
+  await $.turn.complete({ turnId: 't1', answer: 'ok', durationMs: 41000, isAborted: false, reason: 'answer', usage: null })
   const ui = await $.ui.mount({
     plugin: 'rai-hud', component: 'AbovePrompt', surface: 'terminal',
     props: { hasSurvey: false, isWorking: false, maxRows: 3, bodyColumns: 60, scroll: { offset: 0, bodyRows: 3 }, view: {} },
   })
-  expect(await ui.find({ type: 'Text', text: 'rai@hud:~$' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'exec:2 wr:1 rx:18.2k' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '[OK]' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'rai@hud:~$' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '[OK]' })).toBeUndefined()
 })
 
 test('the band stays empty before the first turn', async ($, on) => {

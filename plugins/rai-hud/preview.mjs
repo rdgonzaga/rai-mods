@@ -1,6 +1,8 @@
-// Preview every mascot state in your terminal: node preview.mjs
+// Preview the mascot in your terminal: node preview.mjs [full|mini]
 import { pixels, asAnsi } from './hooks/sprite.js'
-for (const s of ['IDLE', 'THINKING', 'SCANNING', 'EDITING', 'EXEC', 'ALERT', 'DONE', 'STOPPED', 'SLEEP']) {
+
+const size = process.argv[2] || 'full'
+for (const s of ['IDLE', 'THINKING', 'SCANNING', 'EDITING', 'EXEC', 'NET', 'ALERT', 'DONE', 'STOPPED', 'LEVELUP', 'SLEEP', 'BOOT']) {
   console.log('== ' + s)
-  console.log(asAnsi(pixels(s, 1)))
+  console.log(asAnsi(pixels(s, s === 'BOOT' ? 6 : 3, { size })))
 }
