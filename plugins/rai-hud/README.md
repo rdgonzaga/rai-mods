@@ -25,15 +25,14 @@ Matrix rain falls behind the dog while Claude works. The full scene needs a 60-c
 
 The dog comes from `art/rottweiler.png` (a generated illustration, background removed). `python art/build_dog.py` turns it into the chunky pixel grids in `hooks/dogart.js`; the laptop, screen, eye and effects are drawn in code.
 
-**Restyle.** Claude Code's own rows get the same look:
+**Restyle.** A quiet version of the same look on Claude Code's own rows:
 
-- tool calls: `[EDIT] src/auth.ts +12 -3 ✓`, `[EXEC] npm test …`, `[READ]`, `[GREP]`, `[NET ]`, `[MCP ]`… The diff or output still shows underneath
-- folded reads and searches: `[SCAN] 3 reads · 2 greps ✓`
+- tool calls: `edit src/auth.ts +12 -3`, `exec npm test …`, `read`, `grep`, `net`, `mcp`… A mark shows only while running (`…`) or when a call fails (`✗`, `⊘`). The diff or output still shows underneath
+- folded reads and searches: `scan 3 reads · 2 greps`
 - your prompts: `rai@hud:~$ fix the auth bug`
-- Claude's replies start with a `[rai]>` tag
 - the spinner says `Injecting…`, `Tracing…`, `Escalating…` to match what's happening
-- turns end with `[OK] op complete :: 41s · exec:6 · wr:2 · +18 XP` (`[SIGINT]` if you stopped it)
-- the hint line adds your level, the footer says `guards armed`, and guard dialogs are headed `GIT-GUARD` / `SECRET`
+- turns end with `✓ 41s · +18xp` (`✗ aborted 3s` if you stopped it)
+- guard dialogs are headed `GIT-GUARD` / `SECRET`
 
 `/hud style off` hands everything back to stock Claude Code.
 
@@ -55,11 +54,21 @@ Both skip `claude -p` runs, so scripts never hang on a dialog.
 
 **XP and levels.** Each finished turn gives 5 XP + 1 per tool call + 3 per file edited. Ten titles from *script kiddie* to *the architect*, and the dog's outline color unlocks at levels 3, 5, 7 and 9 (green, purple, crimson, gold). Saved across sessions.
 
-**Sounds.** Chime when a 15s+ turn finishes, siren on guard prompts, fanfare on level up. On Windows they play through PowerShell, since `$.audio` has no player there. Regenerate them with `python sounds/make_sounds.py`.
+**Journal.** `/hud journal <dir>` keeps a daily note there (`<dir>/YYYY-MM-DD.md`, made for an Obsidian vault) with one section per session:
+
+```md
+## 14:32–15:10 · rai-mods (main) · 38m
+- 6 turns · 41 tools · +212 XP → LVL 4
+- files (3, +134 -14): `hooks/register.js` +120 -14, `hooks/journal.js` new, …
+- shell: 18 run, 2 failed
+- guards: push ✓ allowed, secret ⊘ denied
+```
+
+The section is rewritten after every turn, so a crash still leaves the log, and parallel sessions each keep their own. It's off until you set a folder; `/hud journal off` stops it. Scripts and sessions with no turns write nothing.
+
+**Sounds.** A soft chime when a 15s+ turn finishes, two gentle pulses on guard prompts, an arpeggio on level up. On Windows they play through PowerShell, since `$.audio` has no player there. Regenerate them with `python sounds/make_sounds.py`.
 
 **Night mode.** Midnight to 5am: coffee mug, drowsy blinks, and a red `go to sleep` line.
-
-**Also:** the spinner shows `▸ exec:4 wr:1` for the current turn.
 
 ## Keys and commands
 
@@ -71,6 +80,7 @@ Both skip `claude -p` runs, so scripts never hang on a dialog.
 | `/hud files` (or `git`, `ci`, `3`…) | jump to a tab |
 | `/hud mute` | toggle sounds |
 | `/hud style` (`on` / `off`) | toggle the restyle of Claude Code's rows |
+| `/hud journal <dir>` / `off` | start or stop the session journal |
 
 The sidebar opens by itself in terminals 144+ columns wide. In a narrower one the mascot rides in the band until your first prompt, which places the sidebar at any width.
 

@@ -1,6 +1,6 @@
 {
   "name": "rai-hud",
-  "version": "0.3.0",
-  "description": "Terminal-ops HUD: a pixel rottweiler hacker, a hacker restyle of Claude Code's own rows, a sidebar with tasks, files, commands, git, CI and ports, git and secret guards, XP levels, sounds, and night mode. Makes no model calls and adds nothing to Claude's context.",
+  "version": "0.4.0",
+  "description": "Terminal-ops HUD: a pixel rottweiler hacker, a hacker restyle of Claude Code's own rows, a sidebar with tasks, files, commands, git, CI and ports, git and secret guards, a session journal, XP levels, sounds, and night mode. Makes no model calls and adds nothing to Claude's context.",
   "author": { "name": "Rainer Gonzaga" }
 }

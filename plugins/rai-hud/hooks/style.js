@@ -24,18 +24,18 @@ export function relPathOf(abs, root) {
 // [tag, color] for a tool. Tags are four characters so the rows line up.
 export function tagFor(tool) {
   const t = String(tool || '')
-  if (t === 'Read') return ['READ', 'cyan']
-  if (t === 'Edit' || t === 'NotebookEdit') return ['EDIT', 'green']
-  if (t === 'Write') return ['WRIT', 'green']
-  if (t === 'Bash' || t === 'PowerShell') return ['EXEC', 'yellow']
-  if (t === 'Grep') return ['GREP', 'cyan']
-  if (t === 'Glob') return ['GLOB', 'cyan']
-  if (t === 'WebFetch' || t === 'WebSearch') return ['NET ', 'magenta']
-  if (t === 'Agent') return ['SPWN', 'magenta']
-  if (t === 'TaskCreate' || t === 'TaskUpdate' || t === 'TodoWrite' || t === 'TaskList' || t === 'TaskGet') return ['PLAN', 'green']
-  if (t === 'Skill') return ['SKIL', 'green']
-  if (t.startsWith('mcp__')) return ['MCP ', 'magenta']
-  return ['TOOL', 'gray']
+  if (t === 'Read') return ['read', 'cyan']
+  if (t === 'Edit' || t === 'NotebookEdit') return ['edit', 'green']
+  if (t === 'Write') return ['writ', 'green']
+  if (t === 'Bash' || t === 'PowerShell') return ['exec', 'yellow']
+  if (t === 'Grep') return ['grep', 'cyan']
+  if (t === 'Glob') return ['glob', 'cyan']
+  if (t === 'WebFetch' || t === 'WebSearch') return ['net ', 'magenta']
+  if (t === 'Agent') return ['spwn', 'magenta']
+  if (t === 'TaskCreate' || t === 'TaskUpdate' || t === 'TodoWrite' || t === 'TaskList' || t === 'TaskGet') return ['plan', 'green']
+  if (t === 'Skill') return ['skil', 'green']
+  if (t.startsWith('mcp__')) return ['mcp ', 'magenta']
+  return ['tool', 'gray']
 }
 
 // "server:tool" from "mcp__server__tool"
@@ -97,12 +97,12 @@ export function detailFor(tool, output) {
   return ''
 }
 
-// [mark, color] for a call's state
+// [mark, color] for a call's state. A call that worked gets no mark.
 export function statusFor(p) {
-  if (p.isInterrupted) return ['⊘ SIGINT', 'red']
+  if (p.isInterrupted) return ['⊘', 'red']
   if (p.isErrored) return ['✗', 'red']
   if (p.isRunning) return ['…', 'yellow']
-  return ['✓', 'green']
+  return ['', 'green']
 }
 
 // "3 reads · 2 greps · 1 glob" for a folded group of calls
@@ -140,16 +140,10 @@ export function fmtDuration(ms) {
   return s < 60 ? s + 's' : Math.floor(s / 60) + 'm' + String(s % 60).padStart(2, '0') + 's'
 }
 
-// The turn-end line's parts: [label, color, text]
+// The turn-end line: "✓ 41s · +18xp", or "✗ aborted 3s"
 export function turnSummary(record, durationMs) {
-  let label = ['[OK]', 'green', 'op complete']
-  if (record && record.aborted) label = ['[SIGINT]', 'red', 'op aborted']
-  else if (record && record.error) label = ['[ERR]', 'red', 'op failed']
-  const stats = [fmtDuration(durationMs)]
-  if (record) {
-    stats.push('exec:' + record.tools)
-    if (record.files) stats.push('wr:' + record.files)
-    if (record.xpGain) stats.push('+' + record.xpGain + ' XP')
-  }
-  return { label: label[0], color: label[1], text: label[2] + ' :: ' + stats.join(' · ') }
+  const time = fmtDuration(durationMs)
+  if (record && record.aborted) return { label: '✗', color: 'red', text: 'aborted ' + time }
+  if (record && record.error) return { label: '✗', color: 'red', text: 'error ' + time }
+  return { label: '✓', color: 'green', text: time + (record && record.xpGain ? ' · +' + record.xpGain + 'xp' : '') }
 }

@@ -132,7 +132,7 @@ test('the mascot pane tracks what Claude is doing', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Raster', key: 'mascot' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '[EDITING]' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'tgt: auth.ts' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '> auth.ts' })).toBeDefined()
   await ui.unmount()
   const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await desk.find({ type: 'Svg' })).toBeDefined()

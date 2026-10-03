@@ -63,7 +63,6 @@ test('crossing a level shows LEVEL UP, toasts, and plays the fanfare', async ($,
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: '[LEVELUP]' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'LVL 2' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'packet sniffer' })).toBeDefined()
 })
 
 test('long turns chime, short ones stay quiet, guards sound the siren', async ($, on) => {

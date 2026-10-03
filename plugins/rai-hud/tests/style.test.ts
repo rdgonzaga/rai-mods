@@ -4,13 +4,13 @@ import { tagFor, targetFor, detailFor, patchCounts, mcpName, groupSummary, verbF
 // ── style.js units ─────────────────────────────────────────────────────────
 
 test('every tool gets a four-character tag and a color', () => {
-  expect(tagFor('Read')).toEqual(['READ', 'cyan'])
-  expect(tagFor('Edit')).toEqual(['EDIT', 'green'])
-  expect(tagFor('Write')).toEqual(['WRIT', 'green'])
-  expect(tagFor('PowerShell')).toEqual(['EXEC', 'yellow'])
-  expect(tagFor('WebSearch')).toEqual(['NET ', 'magenta'])
-  expect(tagFor('mcp__github__create_pr')).toEqual(['MCP ', 'magenta'])
-  expect(tagFor('SomethingNew')).toEqual(['TOOL', 'gray'])
+  expect(tagFor('Read')).toEqual(['read', 'cyan'])
+  expect(tagFor('Edit')).toEqual(['edit', 'green'])
+  expect(tagFor('Write')).toEqual(['writ', 'green'])
+  expect(tagFor('PowerShell')).toEqual(['exec', 'yellow'])
+  expect(tagFor('WebSearch')).toEqual(['net ', 'magenta'])
+  expect(tagFor('mcp__github__create_pr')).toEqual(['mcp ', 'magenta'])
+  expect(tagFor('SomethingNew')).toEqual(['tool', 'gray'])
   for (const t of ['Read', 'Glob', 'Agent', 'TodoWrite', 'Skill', 'x']) expect(tagFor(t)[0].length).toBe(4)
 })
 
@@ -35,16 +35,17 @@ test('details come from the finished output', () => {
 test('status marks, group summaries, verbs, and the turn line', () => {
   expect(statusFor({ isRunning: true })).toEqual(['…', 'yellow'])
   expect(statusFor({ isErrored: true })).toEqual(['✗', 'red'])
-  expect(statusFor({ isInterrupted: true, isErrored: true })).toEqual(['⊘ SIGINT', 'red'])
-  expect(statusFor({})).toEqual(['✓', 'green'])
+  expect(statusFor({ isInterrupted: true, isErrored: true })).toEqual(['⊘', 'red'])
+  expect(statusFor({})).toEqual(['', 'green'])
   expect(groupSummary([{ tool: 'Read' }, { tool: 'Read' }, { tool: 'Grep' }, { tool: 'Glob' }])).toBe('2 reads · 1 grep · 1 glob')
   expect(verbFor('EDITING', 0)).toBe('Injecting')
   expect(verbFor('EDITING', 7)).toBe(verbFor('EDITING', 7))
   expect(fmtDuration(41000)).toBe('41s')
   expect(fmtDuration(64000)).toBe('1m04s')
-  expect(turnSummary({ tools: 6, files: 2, xpGain: 18 }, 41000)).toEqual({ label: '[OK]', color: 'green', text: 'op complete :: 41s · exec:6 · wr:2 · +18 XP' })
-  expect(turnSummary({ tools: 1, files: 0, xpGain: 0, aborted: true }, 3000).label).toBe('[SIGINT]')
-  expect(turnSummary(undefined, 5000).text).toBe('op complete :: 5s')
+  expect(turnSummary({ tools: 6, files: 2, xpGain: 18 }, 41000)).toEqual({ label: '✓', color: 'green', text: '41s · +18xp' })
+  expect(turnSummary({ tools: 1, files: 0, xpGain: 0, aborted: true }, 3000)).toEqual({ label: '✗', color: 'red', text: 'aborted 3s' })
+  expect(turnSummary({ tools: 1, files: 0, xpGain: 0, error: true }, 3000).text).toBe('error 3s')
+  expect(turnSummary(undefined, 5000).text).toBe('5s')
 })
 
 // ── Mounted sites ──────────────────────────────────────────────────────────
@@ -84,25 +85,26 @@ test('ToolUse draws a tagged header for each state', async ($, on) => {
   await start($)
   const patch = [{ lines: ['+a', '+b', '-c'] }]
   let ui = await $.ui.mount(site('ToolUse', { tool_use_id: 't', tool: 'Edit', input: { file_path: 'C:/work/src/auth.ts' }, isRunning: false, isErrored: false, isInterrupted: false, output: { structuredPatch: patch } }))
-  expect(await ui.find({ type: 'Text', text: '[EDIT]' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'edit' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'src/auth.ts' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '+2 -1' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '✓' })).toBeDefined()
+  // A call that worked gets no mark
+  expect(await ui.find({ type: 'Text', text: '✓' })).toBeUndefined()
   await ui.unmount()
   ui = await $.ui.mount(site('ToolUse', { tool_use_id: 't2', tool: 'Bash', input: { command: 'npm test' }, isRunning: true, isErrored: false, isInterrupted: false }))
-  expect(await ui.find({ type: 'Text', text: '[EXEC]' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'exec' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '…' })).toBeDefined()
   await ui.unmount()
   ui = await $.ui.mount(site('ToolUse', { tool_use_id: 't3', tool: 'Bash', input: { command: 'sleep 9' }, isRunning: false, isErrored: true, isInterrupted: true }))
-  expect(await ui.find({ type: 'Text', text: '⊘ SIGINT' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '⊘' })).toBeDefined()
 })
 
-test('ToolGroup folds into one [SCAN] line, and unfolds untouched', async ($, on) => {
+test('ToolGroup folds into one scan line, and unfolds untouched', async ($, on) => {
   const seen = setup(on)
   await start($)
   const calls = [{ tool: 'Read', input: {}, isRunning: false, isErrored: false, isInterrupted: false }, { tool: 'Grep', input: {}, isRunning: false, isErrored: false, isInterrupted: false }]
   let ui = await $.ui.mount(site('ToolGroup', { calls, isActive: false, isExpanded: false }))
-  expect(await ui.find({ type: 'Text', text: '[SCAN]' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'scan' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '1 read · 1 grep' })).toBeDefined()
   await ui.unmount()
   ui = await $.ui.mount(site('ToolGroup', { calls, isActive: false, isExpanded: true }))
@@ -110,13 +112,12 @@ test('ToolGroup folds into one [SCAN] line, and unfolds untouched', async ($, on
   expect(seen.some((e) => e.component === 'ToolGroup')).toBe(true)
 })
 
-test('replies get a [rai]> tag on the first block only', async ($, on) => {
+test('replies are left untouched', async ($, on) => {
   const seen = setup(on)
   await start($)
   await $.ui.mount(site('AssistantMessage', { text: 'Fixed it.', isFirstOfReply: true }))
-  await $.ui.mount(site('AssistantMessage', { text: 'More.', isFirstOfReply: false }, 'r2'))
   const texts = seen.filter((e) => e.component === 'AssistantMessage').map((e) => e.props.text)
-  expect(texts).toEqual(['`[rai]>` Fixed it.', 'More.'])
+  expect(texts).toEqual(['Fixed it.'])
 })
 
 test('your prompts read as a shell line; other messages are left alone', async ($, on) => {
@@ -138,13 +139,13 @@ test('the turn-end line shows the turn stats and XP', async ($, on) => {
   await $.tool.call({ tool: 'Edit', file_path: 'C:/work/a.ts' })
   await $.turn.complete({ turnId: 't1', answer: 'ok', durationMs: 41000, isAborted: false, reason: 'answer', usage: null })
   let ui = await $.ui.mount(site('TurnDuration', { word: 'Baked', durationMs: 41000 }, 'm1'))
-  expect(await ui.find({ type: 'Text', text: '[OK]' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '✓' })).toBeDefined()
   // 5 for the turn + 2 tool calls + 3 for the edited file
-  expect(await ui.find({ type: 'Text', text: 'op complete :: 41s · exec:2 · wr:1 · +10 XP' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '41s · +10xp' })).toBeDefined()
   await ui.unmount()
   // A row from before rai-hud loaded: duration only
   ui = await $.ui.mount(site('TurnDuration', { word: 'Baked', durationMs: 3000 }, 'm-old'))
-  expect(await ui.find({ type: 'Text', text: 'op complete :: 3s' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '3s' })).toBeDefined()
 })
 
 test('the spinner word becomes a hacker verb in the terminal', async ($, on) => {
@@ -155,18 +156,18 @@ test('the spinner word becomes a hacker verb in the terminal', async ($, on) => 
   await $.ui.mount(site('Spinner', { word: 'Sauteing', message: null, suffix: '…', mode: 'tool-use' }))
   const spin = seen.find((e) => e.component === 'Spinner')
   expect(['Injecting', 'Patching', 'Rewriting']).toContain(spin.props.word)
-  expect(spin.props.suffix).toBe(' ▸ exec:1 wr:1…')
+  expect(spin.props.suffix).toBe('…')
 })
 
-test('hint line, footer modes and notices get small touches', async ($, on) => {
+test('hint line and footer stay stock; notices get an [i] tag', async ($, on) => {
   const seen = setup(on)
   await start($)
   await $.ui.mount(site('PromptHint', { isDraft: false, isWorking: false, hint: '? for shortcuts' }))
   await $.ui.mount(site('SessionMode', { modes: ['focus'] }))
   await $.ui.mount(site('InfoNotice', { text: 'Using Opus', command: null }))
   const by = (c) => seen.find((e) => e.component === c).props
-  expect(by('PromptHint').tail).toBe(' · LVL 1 · /hud')
-  expect(by('SessionMode').modes).toEqual(['focus', 'guards armed'])
+  expect(by('PromptHint').tail).toBeUndefined()
+  expect(by('SessionMode').modes).toEqual(['focus'])
   expect(by('InfoNotice').text).toBe('[i] Using Opus')
 })
 

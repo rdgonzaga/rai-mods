@@ -9,6 +9,7 @@
 import { dims, pixels, cellsOf, asSvg, scaleGrid, scaleFor, face } from './sprite.js'
 import { findSecret, envValues, isSecretHome, mask, parseWindowsPorts, parseLsofPorts, portHint } from './scan.js'
 import { clip, baseName, relPathOf, tagFor, targetFor, detailFor, statusFor, groupSummary, verbFor, turnSummary } from './style.js'
+import { dayOf, formatSection, upsertSection } from './journal.js'
 
 // ── Pane and mascot ────────────────────────────────────────────────────────
 const PANE = 'rai-hud'
@@ -158,6 +159,21 @@ let git = { upstream: '', ahead: 0, behind: 0, stash: 0, unpushed: [], fetching:
 let ci = { pr: null, checks: [], error: '', loading: false, checkedAt: 0 }
 // 6: dev servers listening on this machine. { port, name, pid }
 let ports = []
+
+// ── Journal ────────────────────────────────────────────────────────────────
+// Where the daily notes go (`/hud journal <dir>`); empty means off
+let journalDir = ''
+let sessionCwd = ''
+let sessionId = ''
+// This session's totals, for its journal section
+let sessionStartedAt = 0
+let turnsDone = 0
+let toolTotal = 0
+let cmdTotal = 0
+let cmdFails = 0
+let xpEarned = 0
+// Guard prompts: { kind, outcome: 'allowed' | 'denied' }
+let guardLog = []
 
 // ── Helpers (pure) ─────────────────────────────────────────────────────────
 function moodForTool(tool) {
@@ -471,8 +487,51 @@ async function loadProfile($) {
     xp = Number((await $.store.get('xp')) ?? 0) || 0
     muted = (await $.store.get('muted')) === true
     styleOn = (await $.store.get('style')) !== false
+    journalDir = String((await $.store.get('journalDir')) ?? '')
   } catch {
     // No store yet
+  }
+}
+
+// Start a fresh journal section: a new session, or the one /clear leaves behind
+function resetJournal(now) {
+  sessionId = ''
+  sessionStartedAt = now
+  turnsDone = 0
+  toolTotal = 0
+  cmdTotal = 0
+  cmdFails = 0
+  xpEarned = 0
+  guardLog = []
+}
+
+// Rewrite this session's section in today's note. Runs after every turn, so a
+// crash or a closed window still leaves the log; scripts and empty sessions skip it.
+async function writeJournal($) {
+  if (!journalDir || !interactive || !turnsDone) return
+  try {
+    if (!sessionId) sessionId = await $.session.id()
+    const day = dayOf(sessionStartedAt)
+    const path = journalDir.replace(/[\\/]+$/, '') + '/' + day + '.md'
+    const before = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+    const section = formatSection({
+      id: sessionId,
+      startedAt: sessionStartedAt,
+      endedAt: await $.clock.now(),
+      project: baseName(repoRoot || sessionCwd),
+      branch,
+      turns: turnsDone,
+      tools: toolTotal,
+      xp: xpEarned,
+      level: levelOf(xp),
+      files: [...files.entries()].map(([p, s]) => [relPath(p), s]),
+      cmds: cmdTotal,
+      cmdFails,
+      guards: guardLog,
+    })
+    await $.fs.write(path, upsertSection(before, sessionId, section, day))
+  } catch {
+    // A missing or locked vault shouldn't break the session
   }
 }
 
@@ -540,6 +599,8 @@ export function register(on) {
   on('session.start', async ($, e, next) => {
     interactive = e.isInteractive
     isWindows = /^[A-Za-z]:[\\/]/.test(e.cwd || '')
+    sessionCwd = e.cwd || ''
+    resetJournal(await $.clock.now())
     await refreshBranch($)
     await refreshGitState($)
     await loadEnvSecrets($)
@@ -562,7 +623,7 @@ export function register(on) {
         await $.command.register({
           name: 'hud',
           description: 'Toggle the rai-hud sidebar, or jump to a tab',
-          argumentHint: '[tasks|files|cmds|git|ci|ports|mute|style]',
+          argumentHint: '[tasks|files|cmds|git|ci|ports|mute|style|journal <dir>|journal off]',
           immediate: true,
         })
       } catch {
@@ -594,6 +655,21 @@ export function register(on) {
       }
       $.ui.invalidate('ui.render')
       $.ui.toast(styleOn ? '[+] hacker restyle on' : '[-] hacker restyle off')
+      return {}
+    }
+    // "/hud journal <dir>" turns the session journal on, "/hud journal off" off
+    if (arg === 'journal' || arg.startsWith('journal ')) {
+      const raw = String(e.args || '').trim().slice('journal'.length).trim()
+      if (raw) {
+        journalDir = raw.toLowerCase() === 'off' ? '' : raw.replace(/^["']|["']$/g, '')
+        try {
+          await $.store.set('journalDir', journalDir)
+        } catch {
+          // Keep it for this session at least
+        }
+        if (journalDir) await writeJournal($)
+      }
+      $.ui.toast(journalDir ? '[+] journal :: ' + journalDir : '[-] journal off · /hud journal <dir> to start')
       return {}
     }
     const pick = TABS.find((t, i) => arg && (t.startsWith(arg) || arg === String(i + 1)))
@@ -648,6 +724,8 @@ export function register(on) {
     const failed = e.isAborted || e.reason === 'error'
     const gain = failed || !interactive ? 0 : xpForTurn(toolCalls, turnFiles.size)
     const leveled = gain ? await awardXp($, gain) : 0
+    turnsDone += 1
+    xpEarned += gain
     turnLog.push({ tools: toolCalls, files: turnFiles.size, xpGain: gain, aborted: !!e.isAborted, error: e.reason === 'error' })
     if (turnLog.length > 200) {
       turnLog.shift()
@@ -668,13 +746,28 @@ export function register(on) {
     await refreshBranch($)
     await refreshGitState($)
     await refreshFiles($)
+    await writeJournal($)
     $.ui.invalidate('ui.render')
     return result
+  })
+
+  // Last journal write; after a /clear the process goes on with no
+  // session.start, so start a fresh section for what comes next
+  on('session.end', async ($, e, next) => {
+    if (!sessionId && e.sessionId) sessionId = e.sessionId
+    await writeJournal($)
+    try {
+      resetJournal(await $.clock.now())
+    } catch {
+      resetJournal(Date.now())
+    }
+    return next(e)
   })
 
   // Every tool call: count it, set the mood, and record what it did
   on('tool.call', async ($, e, next) => {
     toolCalls += 1
+    toolTotal += 1
     if (e.tool !== 'AskUserQuestion') {
       target = targetOf(e)
       await setMood($, moodForTool(e.tool))
@@ -692,6 +785,8 @@ export function register(on) {
     const failed = !res || res.deny !== undefined || res.isError
     if (entry) {
       entry.state = res && res.deny !== undefined ? 'deny' : failed ? 'fail' : 'ok'
+      cmdTotal += 1
+      if (entry.state === 'fail') cmdFails += 1
       if (/\bgit\b/.test(e.command)) {
         await refreshBranch($)
         await refreshGitState($)
@@ -721,6 +816,7 @@ export function register(on) {
       ['Authorize', 'Deny'],
       'GIT-GUARD',
     )
+    guardLog.push({ kind: risk.toLowerCase().replace(/_/g, '-'), outcome: ok ? 'allowed' : 'denied' })
     if (!ok) {
       return { deny: 'The user blocked this git command (' + risk + ') via the git guard. Do not retry it; ask the user how to proceed.' }
     }
@@ -746,6 +842,7 @@ export function register(on) {
       ['Authorize', 'Deny'],
       'SECRET',
     )
+    guardLog.push({ kind: 'secret', outcome: ok ? 'allowed' : 'denied' })
     if (!ok) {
       return {
         deny:
@@ -758,16 +855,11 @@ export function register(on) {
     return { deny: 'The secret guard failed, so this was not run. Ask the user how to proceed.' }
   })
 
-  // Spinner: "Injecting ▸ exec:4 wr:1…" (Claude Code's spinner already shows time).
-  // The word becomes a hacker verb for the mood, in the terminal, unless
-  // Claude Code is showing a message of its own.
+  // Spinner: the word becomes a hacker verb for the mood, in the terminal,
+  // unless Claude Code is showing a message of its own
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
-    if (!busy) return next(e)
-    let suffix = ' ▸ exec:' + toolCalls
-    if (turnFiles.size) suffix += ' wr:' + turnFiles.size
-    const props = { ...e.props, suffix: suffix + '…' }
-    if (styleOn && e.surface === 'terminal' && e.props.message == null) props.word = verbFor(mood, turnSeq)
-    return next({ ...e, props })
+    if (!busy || !styleOn || e.surface !== 'terminal' || e.props.message != null) return next(e)
+    return next({ ...e, props: { ...e.props, word: verbFor(mood, turnSeq) } })
   })
 
   // ── Restyle: Claude Code's own rows ──────────────────────────────────────
@@ -787,37 +879,31 @@ export function register(on) {
       flexDirection: 'row',
       columnGap: 1,
       children: [
-        Text({ color, bold: true, children: ['[' + tag + ']'] }),
+        Text({ color, children: [tag] }),
         Text({ wrap: 'truncate', children: [clip(targetFor(p.tool, p.input, repoRoot), room)] }),
         ...(detail ? [Text({ dimColor: true, children: [detail] })] : []),
-        Text({ color: markColor, bold: true, children: [mark] }),
+        ...(mark ? [Text({ color: markColor, children: [mark] })] : []),
       ],
     })
   })
 
-  // A folded run of reads and searches: "[SCAN] 3 reads · 2 greps  ✓"
+  // A folded run of reads and searches: "scan 3 reads · 2 greps"
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
     if (!styleOn || e.props.isExpanded) return next(e)
     const { Box, Text } = $.ui.resolve(e)
     const calls = e.props.calls || []
     const running = e.props.isActive && calls.some((c) => c.isRunning)
     const errored = calls.some((c) => c.isErrored)
-    const [mark, markColor] = running ? ['…', 'yellow'] : errored ? ['✗', 'red'] : ['✓', 'green']
+    const mark = running ? ['…', 'yellow'] : errored ? ['✗', 'red'] : null
     return Box({
       flexDirection: 'row',
       columnGap: 1,
       children: [
-        Text({ color: 'cyan', bold: true, children: ['[SCAN]'] }),
+        Text({ color: 'cyan', children: ['scan'] }),
         Text({ wrap: 'truncate', children: [groupSummary(calls)] }),
-        Text({ color: markColor, bold: true, children: [mark] }),
+        ...(mark ? [Text({ color: mark[1], children: [mark[0]] })] : []),
       ],
     })
-  })
-
-  // Claude's reply: a [rai]> tag on its first block; the markdown is untouched
-  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
-    if (!styleOn || !e.props.isFirstOfReply || !e.props.text) return next(e)
-    return next({ ...e, props: { ...e.props, text: '`[rai]>` ' + e.props.text } })
   })
 
   // Your prompt, as a shell line: "rai@hud:~$ fix the auth bug"
@@ -831,7 +917,7 @@ export function register(on) {
     })
   })
 
-  // The line that closes a turn: "[OK] op complete :: 41s · exec:6 · wr:2 · +18 XP"
+  // The line that closes a turn: "✓ 41s · +18xp"
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
     if (!styleOn) return next(e)
     const { Box, Text } = $.ui.resolve(e)
@@ -846,22 +932,10 @@ export function register(on) {
       flexDirection: 'row',
       columnGap: 1,
       children: [
-        Text({ color: line.color, bold: true, children: [line.label] }),
-        Text({ color: line.color, dimColor: true, wrap: 'truncate', children: [line.text] }),
+        Text({ color: line.color, children: [line.label] }),
+        Text({ dimColor: true, wrap: 'truncate', children: [line.text] }),
       ],
     })
-  })
-
-  // The hint line under the prompt: Claude Code's line, plus your level
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    if (!styleOn || e.props.isWorking || e.props.isDraft) return next(e)
-    return next({ ...e, props: { ...e.props, tail: ' · LVL ' + levelOf(xp) + ' · /hud' } })
-  })
-
-  // The footer's mode labels: say the guards are watching
-  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    if (!styleOn || !interactive) return next(e)
-    return next({ ...e, props: { ...e.props, modes: [...(e.props.modes || []), 'guards armed'] } })
   })
 
   // Status notices under the logo
@@ -903,6 +977,13 @@ export function register(on) {
       })
     }
 
+    // One row: "[EXEC] > npm test        LVL 4 ▰▰▰▱▱"
+    const level = levelOf(xp)
+    const floor = xpFor(level)
+    const ceil = xpFor(level + 1)
+    const barLen = width >= 40 ? 6 : 0
+    const filled = Math.round(((xp - floor) / (ceil - floor)) * barLen)
+    const busyTarget = target && mood !== 'IDLE' && mood !== 'SLEEP'
     const readout = [
       Box({
         flexDirection: 'row',
@@ -910,30 +991,16 @@ export function register(on) {
         children: [
           ...(k ? [] : [Text({ color, bold: true, children: [face(mood)] })]),
           Text({ color, bold: true, children: ['[' + mood + ']'] }),
-          Text({ color, wrap: 'truncate', children: ['> ' + MOOD_LINE[mood]] }),
+          Box({
+            flexGrow: 1,
+            children: [Text({ color, dimColor: !!busyTarget, wrap: 'truncate', children: ['> ' + (busyTarget ? target : MOOD_LINE[mood])] })],
+          }),
+          Text({ color: 'yellow', children: ['LVL ' + level] }),
+          ...(barLen ? [Text({ color: 'yellow', dimColor: true, children: ['▰'.repeat(filled) + '▱'.repeat(barLen - filled)] })] : []),
+          ...(muted ? [Text({ dimColor: true, children: ['🔇'] })] : []),
         ],
       }),
     ]
-    if (target && mood !== 'IDLE' && mood !== 'SLEEP') {
-      readout.push(Text({ color: 'green', dimColor: true, wrap: 'truncate', children: ['tgt: ' + target] }))
-    }
-    const level = levelOf(xp)
-    const floor = xpFor(level)
-    const ceil = xpFor(level + 1)
-    const barLen = Math.max(4, Math.min(16, width - 30))
-    const filled = Math.round(((xp - floor) / (ceil - floor)) * barLen)
-    readout.push(
-      Box({
-        flexDirection: 'row',
-        columnGap: 1,
-        children: [
-          Text({ color: 'yellow', bold: true, children: ['LVL ' + level] }),
-          ...(width >= 34 ? [Text({ color: 'yellow', wrap: 'truncate', children: [titleOf(level)] })] : []),
-          Text({ color: 'yellow', children: ['▰'.repeat(filled) + '▱'.repeat(barLen - filled)] }),
-          Text({ dimColor: true, children: [xp + '/' + ceil + (muted ? ' 🔇' : '')] }),
-        ],
-      }),
-    )
     if (isNight()) readout.push(Text({ color: 'red', bold: true, children: [nightLine()] }))
 
     // Tab bar, with a count on each tab
@@ -1021,12 +1088,8 @@ export function register(on) {
     if (tab === 'files') {
       if (!files.size) body = [dim('// no files changed yet')]
       else {
-        let add = 0
-        let del = 0
         const list = [...files.entries()]
         body = list.slice(0, 12).map(([p, s], i) => {
-          add += s.add
-          del += s.del
           const stat = s.isNew ? 'new' : s.add || s.del ? '' : '±0'
           return Box({
             key: 'file-' + i,
@@ -1057,7 +1120,6 @@ export function register(on) {
           })
         })
         if (list.length > 12) body.push(dim('  +' + (list.length - 12) + ' more'))
-        body.push(dim('Σ ' + files.size + ' files  +' + add + ' -' + del + '  (⧉ copies path)'))
       }
     }
 
@@ -1199,7 +1261,6 @@ export function register(on) {
             ],
           }),
         )
-      body.push(dim('↗ opens in browser · refreshes every 20s'))
     }
 
     return Box({
@@ -1210,11 +1271,6 @@ export function register(on) {
         Text({ dimColor: true, children: ['─'.repeat(width)] }),
         tabBar,
         ...body,
-        Text({
-          dimColor: true,
-          wrap: 'truncate',
-          children: [width >= 46 ? 'ctrl+↑↓ tabs · /hud <tab> · ctrl+x tab focus' : 'ctrl+↑↓ tabs · /hud <tab>'],
-        }),
       ],
     })
   })
@@ -1236,7 +1292,6 @@ export function register(on) {
         Text({ color: 'yellow', children: ['LVL ' + levelOf(xp)] }),
       ]
       if (night) parts.push(Text({ color: 'red', bold: true, children: [nightLine()] }))
-      if (!turnLog.length) parts.push(Text({ dimColor: true, wrap: 'truncate', children: ['· sidebar opens on your first prompt'] }))
       const rows = [Box({ flexDirection: 'row', columnGap: 1, children: parts })]
       const rest = await next(e)
       if (rest) rows.push(rest)
