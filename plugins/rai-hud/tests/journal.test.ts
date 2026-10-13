@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay, summaryOf, aboutIn } from '../hooks/journal.js'
+import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay, summaryOf, aboutIn, addTotals } from '../hooks/journal.js'
 
 // ── journal.js units ───────────────────────────────────────────────────────
 
@@ -151,7 +151,7 @@ function setup(on, { journalDir = 'C:/vault/Journal' } = {}) {
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
   on('tool.call', () => ({ result: 'ran' }))
-  return { files }
+  return { files, store }
 }
 
 async function turn($, id: string, text = 'go') {
@@ -176,6 +176,42 @@ test("each turn rewrites this session's section in the daily note", async ($, on
   expect(text.match(/<!-- rai:sess-1 -->/g)).toHaveLength(1)
   expect(text).toContain('- 3 turns · 3 tools')
   expect(text).toContain('- shell: 3 run')
+})
+
+test('a resumed session adds onto its saved totals instead of starting over', async ($, on) => {
+  const { files, store } = setup(on)
+  store.set('journal:sess-1', {
+    startedAt: Number.MAX_SAFE_INTEGER,
+    summary: 'the first ask',
+    turns: 4,
+    tools: 10,
+    xp: 30,
+    files: [['~/…/x/memory/project_a.md', { add: 0, del: 0, isNew: false }]],
+    cmds: 5,
+    cmdFails: 1,
+    guards: [{ kind: 'push', outcome: 'allowed' }],
+  })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: 'C:\\work' })
+  await turn($, 't1', 'a later ask')
+  const text = [...files.values()][0]
+  expect(text).toContain('- about: the first ask\n')
+  expect(text).toMatch(/- 5 turns · 11 tools · \+\d+ XP/)
+  expect(text).toContain('[[project_a]] edited')
+  expect(text).toContain('- shell: 6 run, 1 failed')
+  expect(text).toContain('- guards: push ✓ allowed')
+  expect((store.get('journal:sess-1') as { turns: number }).turns).toBe(5)
+})
+
+test('totals add up, the earliest start wins, newer file stats replace older', () => {
+  const base = { startedAt: 100, summary: 'a', turns: 1, tools: 2, xp: 3, files: [['f', { add: 1, del: 0, isNew: false }]], cmds: 1, cmdFails: 0, guards: [] }
+  const cur = { startedAt: 500, summary: 'b', turns: 2, tools: 2, xp: 2, files: [['f', { add: 4, del: 1, isNew: false }], ['g', { add: 1, del: 0, isNew: true }]], cmds: 0, cmdFails: 0, guards: [{ kind: 'push', outcome: 'allowed' }] }
+  expect(addTotals(null, cur)).toBe(cur)
+  const t = addTotals(base, cur)
+  expect(t.startedAt).toBe(100)
+  expect(t.summary).toBe('a')
+  expect([t.turns, t.tools, t.xp]).toEqual([3, 4, 5])
+  expect(t.files).toEqual([['f', { add: 4, del: 1, isNew: false }], ['g', { add: 1, del: 0, isNew: true }]])
+  expect(t.guards).toHaveLength(1)
 })
 
 const PANE = {

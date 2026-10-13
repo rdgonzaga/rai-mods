@@ -9,7 +9,7 @@
 import { dims, pixels, cellsOf, asSvg, scaleGrid, scaleFor, face } from './sprite.js'
 import { findSecret, envValues, isSecretHome, mask, parseWindowsPorts, parseLsofPorts, portHint } from './scan.js'
 import { clip, clipStart, baseName, relPathOf, tagFor, targetFor, detailFor, statusFor, groupSummary, verbFor, turnSummary } from './style.js'
-import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay, summaryOf, aboutIn } from './journal.js'
+import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay, summaryOf, aboutIn, addTotals } from './journal.js'
 
 // ── Pane and mascot ────────────────────────────────────────────────────────
 const PANE = 'rai-hud'
@@ -176,6 +176,9 @@ let sessionStartedAt = 0
 let turnsDone = 0
 // The session's first real prompt, one line, for the journal
 let summary = ''
+// Totals saved by this session's earlier runs (null: none; undefined: not
+// loaded yet), so a resumed session adds onto its entry. See addTotals.
+let journalBase = undefined
 let toolTotal = 0
 let cmdTotal = 0
 let cmdFails = 0
@@ -514,33 +517,43 @@ function resetJournal(now) {
   cmdFails = 0
   xpEarned = 0
   guardLog = []
+  journalBase = undefined
 }
 
 // Rewrite this session's section in today's note. Runs after every turn, so a
 // crash or a closed window still leaves the log; scripts and empty sessions skip it.
+// The totals are saved per session, so a resumed session adds onto its entry.
 async function writeJournal($) {
   if (!journalDir || !interactive || !turnsDone) return
   try {
     if (!sessionId) sessionId = await $.session.id()
-    const day = dayOf(sessionStartedAt)
-    const path = notePath(day)
-    const before = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
-    const section = formatSection({
-      id: sessionId,
+    const key = 'journal:' + sessionId
+    if (journalBase === undefined) journalBase = (await $.store.get(key)) ?? null
+    const totals = addTotals(journalBase, {
       startedAt: sessionStartedAt,
-      endedAt: await $.clock.now(),
-      project: baseName(repoRoot || sessionCwd),
-      branch,
-      summary: aboutIn(before, sessionId) || summary,
+      summary,
       turns: turnsDone,
       tools: toolTotal,
       xp: xpEarned,
-      level: levelOf(xp),
       files: [...files.entries()].map(([p, s]) => [logPath(p, repoRoot, homeDir), s]),
       cmds: cmdTotal,
       cmdFails,
       guards: guardLog,
     })
+    const day = dayOf(totals.startedAt)
+    const path = notePath(day)
+    const before = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+    const section = formatSection({
+      ...totals,
+      id: sessionId,
+      endedAt: await $.clock.now(),
+      project: baseName(repoRoot || sessionCwd),
+      branch,
+      // Sessions from before totals were saved keep their line from the note
+      summary: totals.summary || aboutIn(before, sessionId),
+      level: levelOf(xp),
+    })
+    await $.store.set(key, totals)
     let prev = ''
     if (!before.trim()) {
       try {

@@ -86,6 +86,27 @@ export function parseNote(text) {
   return out
 }
 
+// A session's totals with this run's added onto its earlier runs' (base, or
+// null for a fresh session). Counts add up and the earliest start wins. A
+// file's +/- comes from git and already covers earlier runs, so the newer
+// stats replace the older ones.
+export function addTotals(base, cur) {
+  if (!base) return cur
+  const files = new Map(base.files || [])
+  for (const [p, s] of cur.files) files.set(p, s)
+  return {
+    startedAt: Math.min(base.startedAt, cur.startedAt),
+    summary: base.summary || cur.summary,
+    turns: base.turns + cur.turns,
+    tools: base.tools + cur.tools,
+    xp: base.xp + cur.xp,
+    files: [...files],
+    cmds: base.cmds + cur.cmds,
+    cmdFails: base.cmdFails + cur.cmdFails,
+    guards: [...(base.guards || []), ...cur.guards],
+  }
+}
+
 // The "about" line a session already has in the note, so a resumed session
 // keeps what it started on. '' when there's none.
 export function aboutIn(text, id) {

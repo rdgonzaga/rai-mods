@@ -66,7 +66,7 @@ Both skip `claude -p` runs, so scripts never hang on a dialog. `/hud guard off` 
 - guards: push ✓ allowed, secret ⊘ denied
 ```
 
-"about" is the session's first prompt, cut to one line (skipped if it holds a secret). The project links to a note with the repo's name (or an `aliases:` entry for it), edited Claude memory notes link to their mirrored copies, and each new day links back to the previous one, so the notes join the rest of the vault's graph. The section is rewritten after every turn, so a crash still leaves the log, and parallel sessions each keep their own. The **today** tab reads it back. It's off until you set a folder; `/hud journal off` stops it. Scripts and sessions with no turns write nothing.
+"about" is the session's first prompt, cut to one line (skipped if it holds a secret). The project links to a note with the repo's name (or an `aliases:` entry for it), edited Claude memory notes link to their mirrored copies, and each new day links back to the previous one, so the notes join the rest of the vault's graph. The section is rewritten after every turn, so a crash still leaves the log, and parallel sessions each keep their own. A resumed session adds onto its entry rather than starting it over. The **today** tab reads it back. It's off until you set a folder; `/hud journal off` stops it. Scripts and sessions with no turns write nothing.
 
 **Sounds.** A soft chime when a 15s+ turn finishes, two gentle pulses on guard prompts, an arpeggio on level up. On Windows they play through PowerShell, since `$.audio` has no player there. Regenerate them with `python sounds/make_sounds.py`.
 
