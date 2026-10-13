@@ -6,6 +6,12 @@ export function clip(s, n) {
   return s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s
 }
 
+// Like clip, but keeps the end: "…/hooks/register.js"
+export function clipStart(s, n) {
+  s = String(s).replace(/\s+/g, ' ').trim()
+  return s.length > n ? '…' + s.slice(s.length - Math.max(1, n - 1)) : s
+}
+
 export function baseName(p) {
   return String(p).split(/[\\/]/).pop()
 }

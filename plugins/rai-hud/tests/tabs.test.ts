@@ -5,7 +5,7 @@ const PANE = {
   component: 'Pane',
   requestId: 'rai-hud',
   viewport: { columns: 160, rows: 40 },
-  props: { title: 'rai//hud', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  props: { title: 'rai//hud', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as const
 
 const SECRET = 'rk_' + 'live9f8e7d6c5b4a3f2e1d'
@@ -92,7 +92,7 @@ test('ci tab shows the PR, review, and checks with failures first', async ($, on
   await start($, clock)
   await $.command.run({ command: 'hud', args: 'ci' })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ key: 'tab-ci' })).toMatchObject({ props: { label: 'ci ✗1' } })
+  expect(await ui.find({ type: 'Text', text: '· ✗1' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '#42 Add auth' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'approved' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'lint' })).toBeDefined()
@@ -112,9 +112,9 @@ test('ports tab lists dev servers, not system ports', async ($, on) => {
   await start($, clock)
   await $.command.run({ command: 'hud', args: 'ports' })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ key: 'tab-ports' })).toMatchObject({ props: { label: 'ports 1' } })
-  expect(await ui.find({ type: 'Text', text: ':3000' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '· 1' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'open-3000' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'node' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'web' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: ':135' })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', key: 'open-135' })).toBeUndefined()
 })

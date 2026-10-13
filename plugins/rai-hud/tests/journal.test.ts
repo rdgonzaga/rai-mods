@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { dayOf, formatSection, upsertSection } from '../hooks/journal.js'
+import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay } from '../hooks/journal.js'
 
 // ── journal.js units ───────────────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ test('a session section lists turns, files, shell and guards', () => {
   expect(formatSection(DATA)).toBe(
     [
       '<!-- rai:abc -->',
-      '## 14:32–15:10 · rai-mods (main) · 38m',
+      '## 14:32–15:10 · [[rai-mods]] (main) · 38m',
       '- 6 turns · 41 tools · +212 XP → LVL 4',
       '- files (2, +134 -14): `hooks/register.js` +120 -14, `hooks/journal.js` new',
       '- shell: 18 run, 2 failed',
@@ -37,6 +37,11 @@ test('a session section lists turns, files, shell and guards', () => {
       '<!-- /rai -->',
     ].join('\n'),
   )
+})
+
+test('names Obsidian cannot link, and no repo, stay plain text', () => {
+  expect(formatSection({ ...DATA, project: 'c#-lab', branch: '' })).toContain('## 14:32–15:10 · c#-lab · 38m')
+  expect(formatSection({ ...DATA, project: '', branch: '' })).toContain('## 14:32–15:10 · no repo · 38m')
 })
 
 test('quiet sessions skip the empty lines, and long file lists are capped', () => {
@@ -57,6 +62,36 @@ test('upsert starts a note, appends new sessions, and replaces its own', () => {
   expect(two).toBe('# 2026-10-03\n\n' + a1 + '\n\n' + b + '\n')
   const a2 = formatSection({ ...DATA, turns: 7 })
   expect(upsertSection(two, 'abc', a2, '2026-10-03')).toBe('# 2026-10-03\n\n' + a2 + '\n\n' + b + '\n')
+})
+
+test('a new note links back to the previous day, skipping gaps and other files', () => {
+  const names = ['2026-10-01.md', '2026-10-04.md', 'Journal.md', '2026-10-06.md', '2026-10-04.md.bak']
+  expect(prevDay(names, '2026-10-06')).toBe('2026-10-04')
+  expect(prevDay(names, '2026-10-01')).toBe('')
+  const a = formatSection(DATA)
+  expect(upsertSection('', 'abc', a, '2026-10-06', '2026-10-04')).toBe('# 2026-10-06\n\n← [[2026-10-04]]\n\n' + a + '\n')
+  // An existing note keeps its header untouched
+  const b = formatSection({ ...DATA, id: 'def' })
+  expect(upsertSection('# x\n\n' + a + '\n', 'def', b, '2026-10-06', '2026-10-04')).toBe('# x\n\n' + a + '\n\n' + b + '\n')
+})
+
+test('files outside the repo log as ~/… with "edited", not a full path and +0 -0', () => {
+  const home = 'C:\\Users\\rai'
+  expect(logPath('C:/work/src/a.ts', 'C:/work', home)).toBe('src/a.ts')
+  expect(logPath('C:\\Users\\rai\\.claude\\CLAUDE.md', 'C:/work', home)).toBe('~/.claude/CLAUDE.md')
+  expect(logPath('C:/Users/rai/.claude/projects/x/memory/MEMORY.md', 'C:/work', home)).toBe('~/…/x/memory/MEMORY.md')
+  const text = formatSection({ ...DATA, files: [['~/.claude/CLAUDE.md', { add: 0, del: 0, isNew: false }]] })
+  expect(text).toContain('`~/.claude/CLAUDE.md` edited')
+})
+
+test('a daily note parses back into its sessions', () => {
+  const note = upsertSection(upsertSection('', 'abc', formatSection(DATA), 'd'), 'def', formatSection({ ...DATA, id: 'def', project: 'raigon', branch: '', turns: 1, xp: 0, files: [] }), 'd')
+  expect(parseNote(note)).toEqual([
+    { id: 'abc', time: '14:32–15:10', project: 'rai-mods (main)', span: '38m', turns: 6, xp: 212, files: 2 },
+    { id: 'def', time: '14:32–15:10', project: 'raigon', span: '38m', turns: 1, xp: 0, files: 0 },
+  ])
+  // Windows line endings, as git may leave them
+  expect(parseNote(note.replace(/\n/g, '\r\n'))).toHaveLength(2)
 })
 
 // ── Wired into the session ─────────────────────────────────────────────────
@@ -107,6 +142,37 @@ test("each turn rewrites this session's section in the daily note", async ($, on
   expect(text.match(/<!-- rai:sess-1 -->/g)).toHaveLength(1)
   expect(text).toContain('- 2 turns · 2 tools')
   expect(text).toContain('- shell: 2 run')
+})
+
+const PANE = {
+  plugin: 'rai-hud',
+  component: 'Pane',
+  requestId: 'rai-hud',
+  surface: 'terminal',
+  viewport: { columns: 160, rows: 40 },
+  props: { title: 'rai//hud', isFocused: false, bodyColumns: 62, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+} as const
+
+test('the today tab lists this session and the others in the note', async ($, on) => {
+  const { files } = setup(on)
+  // Another session already logged today (the mock clock's day)
+  files.set('C:\\vault\\Journal\\' + dayOf(0) + '.md',upsertSection('', 'other', formatSection({ ...DATA, id: 'other', project: 'raigon', branch: '' }), dayOf(0)))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: 'C:\\work' })
+  await turn($, 't1')
+  await $.command.run({ command: 'hud', args: 'today' })
+  const ui = await $.ui.mount(PANE as any)
+  expect(await ui.find({ type: 'Text', text: '· 2' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'raigon' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '    1 turn' })).toBeDefined()
+})
+
+test('the today tab says how to turn the journal on', async ($, on) => {
+  setup(on, { journalDir: '' })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: 'C:\\work' })
+  await $.command.run({ command: 'hud', args: 'today' })
+  const ui = await $.ui.mount(PANE as any)
+  expect(await ui.find({ type: 'Text', text: '// journal off · /hud journal <dir> to log sessions' })).toBeDefined()
 })
 
 test('with no journal dir set, nothing is written', async ($, on) => {

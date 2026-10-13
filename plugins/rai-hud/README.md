@@ -36,35 +36,36 @@ The dog comes from `art/rottweiler.png` (a generated illustration, background re
 
 `/hud style off` hands everything back to stock Claude Code.
 
-**Sidebar tabs**
+**Sidebar.** Under the mascot: one readout row (`EXEC  npm test   lvl 4 ▰▰▰▱▱`), a strip of tab icons `☐ ≡ > ⎇ ✓ ⇄ ◷` (a red `•` marks failed commands or checks), and a header naming the open tab and its count (`‹ files · 3 ──── ›`).
 
 1. **tasks**: Claude's current plan
-2. **files**: files changed this session with `+/-` line counts. `⧉` copies the path
+2. **files**: files changed this session with `+/-` line counts. Press a path to copy it
 3. **cmds**: last 8 shell commands with ✓ / ✗ / ⊘
 4. **git**: ahead/behind, stashes, unpushed commits. `f` fetches
 5. **ci**: the branch's PR, review state and checks via `gh`. `o` opens, `r` refreshes
-6. **ports**: dev servers listening locally. `↗` opens in the browser
+6. **ports**: dev servers listening locally. Press a port to open it in the browser
+7. **today**: today's sessions from the journal, across every project, with yours marked `▸`. Needs `/hud journal <dir>`
 
 **Guards.** These hold the tool call and ask Authorize / Deny:
 
 - **git guard**: push, force push, `reset --hard`, `clean -f`, commits on main/master
 - **secret guard**: writes containing known key formats (AWS, GitHub, Anthropic, OpenAI, Stripe live, Google, Slack, Resend, private keys, DB URLs with passwords, Supabase service-role JWTs), or the real values from the repo's `.env*` files. Shell commands only trip on the real `.env` values.
 
-Both skip `claude -p` runs, so scripts never hang on a dialog.
+Both skip `claude -p` runs, so scripts never hang on a dialog. `/hud guard off` turns the git guard off for the current repo (remembered across sessions); `/hud guard on` arms it again. The secret guard stays on.
 
 **XP and levels.** Each finished turn gives 5 XP + 1 per tool call + 3 per file edited. Ten titles from *script kiddie* to *the architect*, and the dog's outline color unlocks at levels 3, 5, 7 and 9 (green, purple, crimson, gold). Saved across sessions.
 
 **Journal.** `/hud journal <dir>` keeps a daily note there (`<dir>/YYYY-MM-DD.md`, made for an Obsidian vault) with one section per session:
 
 ```md
-## 14:32–15:10 · rai-mods (main) · 38m
+## 14:32–15:10 · [[rai-mods]] (main) · 38m
 - 6 turns · 41 tools · +212 XP → LVL 4
 - files (3, +134 -14): `hooks/register.js` +120 -14, `hooks/journal.js` new, …
 - shell: 18 run, 2 failed
 - guards: push ✓ allowed, secret ⊘ denied
 ```
 
-The section is rewritten after every turn, so a crash still leaves the log, and parallel sessions each keep their own. It's off until you set a folder; `/hud journal off` stops it. Scripts and sessions with no turns write nothing.
+The project links to a note with the repo's name (or an `aliases:` entry for it), and each new day links back to the previous one, so the notes join the rest of the vault's graph. The section is rewritten after every turn, so a crash still leaves the log, and parallel sessions each keep their own. The **today** tab reads it back. It's off until you set a folder; `/hud journal off` stops it. Scripts and sessions with no turns write nothing.
 
 **Sounds.** A soft chime when a 15s+ turn finishes, two gentle pulses on guard prompts, an arpeggio on level up. On Windows they play through PowerShell, since `$.audio` has no player there. Regenerate them with `python sounds/make_sounds.py`.
 
@@ -75,7 +76,7 @@ The section is rewritten after every turn, so a crash still leaves the log, and 
 | | |
 | --- | --- |
 | `Ctrl+↑` / `Ctrl+↓` | previous / next tab, from the prompt |
-| `Ctrl+X` `Tab` | focus the sidebar; then `1`-`6` pick a tab |
+| `Ctrl+X` `Tab` | focus the sidebar, then move between icons and press Enter |
 | `/hud` | show or hide the sidebar |
 | `/hud files` (or `git`, `ci`, `3`…) | jump to a tab |
 | `/hud mute` | toggle sounds |

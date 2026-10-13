@@ -22,12 +22,59 @@ function span(ms) {
 
 const GUARD_MARK = { allowed: '✓ allowed', denied: '⊘ denied' }
 
+// "new", "+12 -3", or "edited" when git has no counts (outside the repo)
+function fileStat(s) {
+  if (s.isNew) return 'new'
+  return s.add || s.del ? '+' + s.add + ' -' + s.del : 'edited'
+}
+
+// A file's name for the log: repo-relative inside the repo, else ~/… and
+// at most its last three parts
+export function logPath(abs, root, home) {
+  const norm = String(abs).replace(/\\/g, '/')
+  const r = String(root || '').replace(/\\/g, '/').replace(/\/+$/, '')
+  if (r && norm.toLowerCase().startsWith(r.toLowerCase() + '/')) return norm.slice(r.length + 1)
+  const h = String(home || '').replace(/\\/g, '/').replace(/\/+$/, '')
+  const underHome = h && norm.toLowerCase().startsWith(h.toLowerCase() + '/')
+  const parts = (underHome ? norm.slice(h.length + 1) : norm).split('/')
+  const tail = parts.length > 3 ? '…/' + parts.slice(-3).join('/') : parts.join('/')
+  return (underHome ? '~/' : '') + tail
+}
+
+// The sessions in a daily note, in order:
+// [{ id, time, project, span, turns, files, xp }]
+export function parseNote(text) {
+  const out = []
+  const re = /<!-- rai:(\S+) -->\r?\n([\s\S]*?)\r?\n<!-- \/rai -->/g
+  let m
+  while ((m = re.exec(String(text || '')))) {
+    const lines = m[2].split(/\r?\n/)
+    const head = (lines.find((l) => l.startsWith('## ')) || '').slice(3).split(' · ')
+    const stats = lines.find((l) => /^- \d+ turns? /.test(l)) || ''
+    const filesLine = lines.find((l) => l.startsWith('- files (')) || ''
+    out.push({
+      id: m[1],
+      time: head[0] || '',
+      project: (head[1] || '').replace(/^\[\[([^\]]*)\]\]/, '$1'),
+      span: head[2] || '',
+      turns: Number((stats.match(/^- (\d+) turn/) || [])[1] || 0),
+      xp: Number((stats.match(/\+(\d+) XP/) || [])[1] || 0),
+      files: Number((filesLine.match(/^- files \((\d+)/) || [])[1] || 0),
+    })
+  }
+  return out
+}
+
 // The markdown for one session, between its markers.
 // data: { id, startedAt, endedAt, project, branch, turns, tools, xp, level,
 //         files: [[path, { add, del, isNew }]], cmds, cmdFails, guards: [{ kind, outcome }] }
 export function formatSection(data) {
+  // The project as an Obsidian link, so a note named or aliased after the repo
+  // ties the day to it; names Obsidian can't link stay plain
+  const p = data.project
+  const project = !p ? 'no repo' : /[[\]|#^]/.test(p) ? p : '[[' + p + ']]'
   const head =
-    '## ' + hhmm(data.startedAt) + '–' + hhmm(data.endedAt) + ' · ' + (data.project || 'no repo') +
+    '## ' + hhmm(data.startedAt) + '–' + hhmm(data.endedAt) + ' · ' + project +
     (data.branch ? ' (' + data.branch + ')' : '') + ' · ' + span(data.endedAt - data.startedAt)
   const lines = [head]
   let stats = data.turns + (data.turns === 1 ? ' turn' : ' turns') + ' · ' + data.tools + ' tools'
@@ -41,7 +88,7 @@ export function formatSection(data) {
       add += s.add
       del += s.del
     }
-    const shown = files.slice(0, 10).map(([p, s]) => '`' + p + '` ' + (s.isNew ? 'new' : '+' + s.add + ' -' + s.del))
+    const shown = files.slice(0, 10).map(([p, s]) => '`' + p + '` ' + fileStat(s))
     if (files.length > 10) shown.push('+' + (files.length - 10) + ' more')
     lines.push('- files (' + files.length + ', +' + add + ' -' + del + '): ' + shown.join(', '))
   }
@@ -52,15 +99,29 @@ export function formatSection(data) {
   return '<!-- rai:' + data.id + ' -->\n' + lines.join('\n') + '\n<!-- /rai -->'
 }
 
+// The latest daily note before this day, from the journal folder's file names,
+// or '' when this is the first
+export function prevDay(names, day) {
+  let best = ''
+  for (const n of names) {
+    const m = /^(\d{4}-\d{2}-\d{2})\.md$/.exec(n)
+    if (m && m[1] < day && m[1] > best) best = m[1]
+  }
+  return best
+}
+
 // The daily note with this session's section replaced, or appended when it's
-// new. An empty note gets a "# YYYY-MM-DD" header first.
-export function upsertSection(text, id, section, day) {
+// new. An empty note gets a "# YYYY-MM-DD" header first, and a link back to
+// the previous note so the days chain together in Obsidian's graph.
+export function upsertSection(text, id, section, day, prev = '') {
   const open = '<!-- rai:' + id + ' -->'
   const start = text.indexOf(open)
   if (start >= 0) {
     const close = text.indexOf('<!-- /rai -->', start)
     if (close >= 0) return text.slice(0, start) + section + text.slice(close + '<!-- /rai -->'.length)
   }
-  const base = text.trim() ? text.replace(/\s*$/, '\n\n') : '# ' + day + '\n\n'
+  const base = text.trim()
+    ? text.replace(/\s*$/, '\n\n')
+    : '# ' + day + '\n\n' + (prev ? '← [[' + prev + ']]\n\n' : '')
   return base + section + '\n'
 }

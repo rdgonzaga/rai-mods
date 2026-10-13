@@ -52,7 +52,7 @@ test('a wide sidebar draws the full scene, at 2x when there is room', async ($, 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   let ui = await $.ui.mount(pane(62, 'dock'))
   expect(await ui.find({ key: 'mascot' })).toMatchObject({ props: { columns: 60, rows: 18 } })
-  expect(await ui.find({ key: 'tab-tasks' })).toMatchObject({ props: { label: 'tasks' } })
+  expect(await ui.find({ key: 'tab-tasks' })).toMatchObject({ props: { label: '☐' } })
   await ui.unmount()
   ui = await $.ui.mount(pane(124, 'dock', 100))
   expect(await ui.find({ key: 'mascot' })).toMatchObject({ props: { columns: 120, rows: 36 } })
@@ -63,7 +63,7 @@ test('a narrow sidebar draws the mini scene and shortens the tabs', async ($, on
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   const ui = await $.ui.mount(pane(34, 'dock'))
   expect(await ui.find({ key: 'mascot' })).toMatchObject({ props: { columns: 30, rows: 10 } })
-  expect(await ui.find({ key: 'tab-tasks' })).toMatchObject({ props: { label: 'tsk' } })
+  expect(await ui.find({ key: 'tab-tasks' })).toMatchObject({ props: { label: '☐' } })
   expect(await ui.find({ key: 'tab-files' })).toMatchObject({ props: { label: '≡' } })
 })
 

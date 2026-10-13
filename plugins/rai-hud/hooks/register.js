@@ -8,8 +8,8 @@
 
 import { dims, pixels, cellsOf, asSvg, scaleGrid, scaleFor, face } from './sprite.js'
 import { findSecret, envValues, isSecretHome, mask, parseWindowsPorts, parseLsofPorts, portHint } from './scan.js'
-import { clip, baseName, relPathOf, tagFor, targetFor, detailFor, statusFor, groupSummary, verbFor, turnSummary } from './style.js'
-import { dayOf, formatSection, upsertSection } from './journal.js'
+import { clip, clipStart, baseName, relPathOf, tagFor, targetFor, detailFor, statusFor, groupSummary, verbFor, turnSummary } from './style.js'
+import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay } from './journal.js'
 
 // ── Pane and mascot ────────────────────────────────────────────────────────
 const PANE = 'rai-hud'
@@ -18,13 +18,14 @@ const SLEEP_AFTER_MS = 2 * 60 * 1000
 const GIT_POLL_MS = 30 * 1000
 const CI_POLL_MS = 60 * 1000
 const PORT_POLL_MS = 20 * 1000
+const TODAY_POLL_MS = 30 * 1000
 let paneOpen = false
 // Whether the surface actually drew the pane. Opened unasked, it waits for a
 // terminal 144 columns wide; opened behind your prompt, it shows at any width.
 let placed = false
 // You closed it yourself (/hud or Esc): don't reopen it on the next prompt
 let userClosed = false
-const TABS = ['tasks', 'files', 'cmds', 'git', 'ci', 'ports']
+const TABS = ['tasks', 'files', 'cmds', 'git', 'ci', 'ports', 'today']
 let tab = 'tasks'
 let mood = 'IDLE'
 let moodUntil = 0 // when a timed mood (DONE, STOPPED) falls back to IDLE
@@ -163,8 +164,13 @@ let ports = []
 // ── Journal ────────────────────────────────────────────────────────────────
 // Where the daily notes go (`/hud journal <dir>`); empty means off
 let journalDir = ''
+// Repo roots where `/hud guard off` turned the git guard off
+let guardOffRepos = []
 let sessionCwd = ''
 let sessionId = ''
+let homeDir = ''
+// 7: today's sessions, read back from the daily note. See parseNote.
+let today = []
 // This session's totals, for its journal section
 let sessionStartedAt = 0
 let turnsDone = 0
@@ -488,6 +494,8 @@ async function loadProfile($) {
     muted = (await $.store.get('muted')) === true
     styleOn = (await $.store.get('style')) !== false
     journalDir = String((await $.store.get('journalDir')) ?? '')
+    const off = await $.store.get('guardOffRepos')
+    guardOffRepos = Array.isArray(off) ? off.map(String) : []
   } catch {
     // No store yet
   }
@@ -512,7 +520,7 @@ async function writeJournal($) {
   try {
     if (!sessionId) sessionId = await $.session.id()
     const day = dayOf(sessionStartedAt)
-    const path = journalDir.replace(/[\\/]+$/, '') + '/' + day + '.md'
+    const path = notePath(day)
     const before = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
     const section = formatSection({
       id: sessionId,
@@ -524,15 +532,50 @@ async function writeJournal($) {
       tools: toolTotal,
       xp: xpEarned,
       level: levelOf(xp),
-      files: [...files.entries()].map(([p, s]) => [relPath(p), s]),
+      files: [...files.entries()].map(([p, s]) => [logPath(p, repoRoot, homeDir), s]),
       cmds: cmdTotal,
       cmdFails,
       guards: guardLog,
     })
-    await $.fs.write(path, upsertSection(before, sessionId, section, day))
+    let prev = ''
+    if (!before.trim()) {
+      try {
+        prev = prevDay((await $.fs.list(journalDir)).map((e) => e.name), day)
+      } catch {
+        // No folder yet
+      }
+    }
+    const after = upsertSection(before, sessionId, section, day, prev)
+    await $.fs.write(path, after)
+    if (day === dayOf(await $.clock.now())) today = parseNote(after)
   } catch {
     // A missing or locked vault shouldn't break the session
   }
+}
+
+function notePath(day) {
+  return journalDir.replace(/[\\/]+$/, '') + '/' + day + '.md'
+}
+
+// Re-read today's note, which other sessions write too
+async function refreshToday($) {
+  if (!journalDir) {
+    today = []
+    return
+  }
+  try {
+    const path = notePath(dayOf(await $.clock.now()))
+    today = (await $.fs.exists(path)) ? parseNote(await $.fs.read(path)) : []
+  } catch {
+    today = []
+  }
+}
+
+async function pollToday($) {
+  if (!paneOpen || tab !== 'today') return
+  const before = JSON.stringify(today)
+  await refreshToday($)
+  if (JSON.stringify(today) !== before) $.ui.invalidate('ui.render')
 }
 
 // Add XP, reading the store first since other sessions add to it too.
@@ -605,6 +648,12 @@ export function register(on) {
     await refreshGitState($)
     await loadEnvSecrets($)
     await loadProfile($)
+    try {
+      homeDir = (await $.env.get('USERPROFILE')) || (await $.env.get('HOME')) || ''
+    } catch {
+      homeDir = ''
+    }
+    await refreshToday($)
     if (interactive) {
       $.ui.toast('[+] rai-hud online :: git-guard ARMED')
       // A short boot animation, then idle
@@ -614,6 +663,7 @@ export function register(on) {
       $.clock.every(GIT_POLL_MS, () => pollGit($))
       $.clock.every(CI_POLL_MS, () => pollCi($))
       $.clock.every(PORT_POLL_MS, () => pollPorts($))
+      $.clock.every(TODAY_POLL_MS, () => pollToday($))
       // First fill, without holding up the session start
       $.clock.after(500, () => pollCi($))
       $.clock.after(800, () => pollPorts($))
@@ -623,7 +673,7 @@ export function register(on) {
         await $.command.register({
           name: 'hud',
           description: 'Toggle the rai-hud sidebar, or jump to a tab',
-          argumentHint: '[tasks|files|cmds|git|ci|ports|mute|style|journal <dir>|journal off]',
+          argumentHint: '[tasks|files|cmds|git|ci|ports|today|mute|style|journal <dir>|journal off]',
           immediate: true,
         })
       } catch {
@@ -657,6 +707,24 @@ export function register(on) {
       $.ui.toast(styleOn ? '[+] hacker restyle on' : '[-] hacker restyle off')
       return {}
     }
+    // "/hud guard off" turns the git guard off for this repo, "/hud guard on" back on
+    if (arg === 'guard' || arg === 'guard on' || arg === 'guard off') {
+      if (!repoRoot) {
+        $.ui.toast('[-] git-guard :: not in a git repo')
+        return {}
+      }
+      const isOff = guardOffRepos.includes(repoRoot)
+      const turnOff = arg === 'guard' ? !isOff : arg === 'guard off'
+      guardOffRepos = guardOffRepos.filter((r) => r !== repoRoot)
+      if (turnOff) guardOffRepos.push(repoRoot)
+      try {
+        await $.store.set('guardOffRepos', guardOffRepos)
+      } catch {
+        // Keep it for this session at least
+      }
+      $.ui.toast(turnOff ? '[-] git-guard OFF :: ' + repoRoot : '[+] git-guard ARMED :: ' + repoRoot)
+      return {}
+    }
     // "/hud journal <dir>" turns the session journal on, "/hud journal off" off
     if (arg === 'journal' || arg.startsWith('journal ')) {
       const raw = String(e.args || '').trim().slice('journal'.length).trim()
@@ -668,6 +736,8 @@ export function register(on) {
           // Keep it for this session at least
         }
         if (journalDir) await writeJournal($)
+        await refreshToday($)
+        $.ui.invalidate('ui.render')
       }
       $.ui.toast(journalDir ? '[+] journal :: ' + journalDir : '[-] journal off · /hud journal <dir> to start')
       return {}
@@ -808,6 +878,7 @@ export function register(on) {
   on('tool.call', { tool: SHELL_TOOLS }, async ($, e, next) => {
     // Scripts and -p runs have nobody to ask, so they pass through untouched
     if (!interactive || typeof e.command !== 'string') return next(e)
+    if (repoRoot && guardOffRepos.includes(repoRoot)) return next(e)
     const risk = riskOf(e.command)
     if (!risk) return next(e)
     const ok = await confirm(
@@ -977,43 +1048,83 @@ export function register(on) {
       })
     }
 
-    // One row: "[EXEC] > npm test        LVL 4 ▰▰▰▱▱"
+    // Everything below the mascot sits in from the edges by PAD columns
+    const PAD = width >= 30 ? 2 : 1
+    const inner = width - PAD * 2
+    // A fixed-width piece of a row: never squeezed, so only the stretchy part
+    // (a target, a path, a command) gives up columns and gets the …
+    const pin = (el) => Box({ flexShrink: 0, children: [el] })
+
+    // One row: "EXEC  npm test          lvl 4 ▰▰▰▱▱"
     const level = levelOf(xp)
     const floor = xpFor(level)
     const ceil = xpFor(level + 1)
-    const barLen = width >= 40 ? 6 : 0
+    const barLen = inner >= 36 ? 5 : 0
     const filled = Math.round(((xp - floor) / (ceil - floor)) * barLen)
     const busyTarget = target && mood !== 'IDLE' && mood !== 'SLEEP'
     const readout = [
       Box({
         flexDirection: 'row',
-        columnGap: 1,
+        columnGap: 2,
         children: [
           ...(k ? [] : [Text({ color, bold: true, children: [face(mood)] })]),
-          Text({ color, bold: true, children: ['[' + mood + ']'] }),
+          pin(Text({ color, bold: true, children: [mood] })),
           Box({
             flexGrow: 1,
-            children: [Text({ color, dimColor: !!busyTarget, wrap: 'truncate', children: ['> ' + (busyTarget ? target : MOOD_LINE[mood])] })],
+            children: [Text({ dimColor: true, wrap: 'truncate', children: [busyTarget ? target : MOOD_LINE[mood]] })],
           }),
-          Text({ color: 'yellow', children: ['LVL ' + level] }),
-          ...(barLen ? [Text({ color: 'yellow', dimColor: true, children: ['▰'.repeat(filled) + '▱'.repeat(barLen - filled)] })] : []),
-          ...(muted ? [Text({ dimColor: true, children: ['🔇'] })] : []),
+          Box({
+            flexDirection: 'row',
+            flexShrink: 0,
+            columnGap: 1,
+            children: [
+              Text({ color: 'yellow', children: ['lvl ' + level] }),
+              ...(barLen ? [Text({ color: 'yellow', dimColor: true, children: ['▰'.repeat(filled) + '▱'.repeat(barLen - filled)] })] : []),
+              ...(muted ? [Text({ dimColor: true, children: ['🔇'] })] : []),
+            ],
+          }),
         ],
       }),
     ]
-    if (isNight()) readout.push(Text({ color: 'red', bold: true, children: [nightLine()] }))
+    if (isNight()) readout.push(Text({ color: 'red', children: [nightLine()] }))
 
-    // Tab bar, with a count on each tab
+    // Tab strip: one icon per tab, the open one bright, a red dot on a tab
+    // that needs a look. The header under it names the open tab and its count.
     const done = plan.filter((t) => t.status === 'completed').length
     const fails = cmds.filter((c) => c.state === 'fail').length
-    const tabs = [
-      ['tasks', '1', 'tasks' + (plan.length ? ' ' + done + '/' + plan.length : '')],
-      ['files', '2', 'files' + (files.size ? ' ' + files.size : '')],
-      ['cmds', '3', 'cmds' + (fails ? ' ✗' + fails : '')],
-      ['git', '4', 'git' + (git.ahead ? ' ↑' + git.ahead : '')],
-      ['ci', '5', 'ci' + ciBadge()],
-      ['ports', '6', 'ports' + (ports.length ? ' ' + ports.length : '')],
-    ]
+    const ciFails = ci.checks.filter((c) => c.bucket === 'fail' || c.bucket === 'cancel').length
+    const TAB_INFO = {
+      tasks: { icon: '☐', count: plan.length ? done + '/' + plan.length : '' },
+      files: { icon: '≡', count: files.size ? String(files.size) : '' },
+      cmds: { icon: '>', count: fails ? '✗' + fails : cmds.length ? String(cmds.length) : '', alert: fails > 0 },
+      git: { icon: '⎇', count: git.ahead ? '↑' + git.ahead : '' },
+      ci: { icon: '✓', count: ciBadge().trim(), alert: ciFails > 0 },
+      ports: { icon: '⇄', count: ports.length ? String(ports.length) : '' },
+      today: { icon: '◷', count: today.length ? String(today.length) : '' },
+    }
+    const strip = Box({
+      flexDirection: 'row',
+      columnGap: inner >= 26 ? 2 : 1,
+      children: TABS.map((id) =>
+        Box({
+          key: 'tabbox-' + id,
+          flexDirection: 'row',
+          children: [
+            Button({
+              key: 'tab-' + id,
+              label: TAB_INFO[id].icon,
+              plain: true,
+              dimColor: tab !== id,
+              onPress: () => {
+                tab = id
+                redraw()
+              },
+            }),
+            ...(TAB_INFO[id].alert ? [Text({ color: 'red', children: ['•'] })] : []),
+          ],
+        }),
+      ),
+    })
     // ‹ and › borrow the /diff panel's Ctrl+Up / Ctrl+Down, which do nothing
     // while that panel is closed, so tabs switch straight from the prompt
     const arrow = (key, label, action, step) =>
@@ -1028,43 +1139,20 @@ export function register(on) {
           redraw()
         },
       })
-    // Fit the tab row to the width: full labels, then short ones, then digits
-    // with only the open tab named
-    const SHORT = { tasks: 'tsk', files: 'fil', cmds: 'cmd', git: 'git', ci: 'ci', ports: 'prt' }
-    const ICON = { tasks: '☐', files: '≡', cmds: '>', git: '⎇', ci: '✓', ports: '⇄' }
-    // A plain button draws "1: label"; the arrows take a column each
-    const rowLen = (ls, g) => 2 + ls.reduce((n, l) => n + l.length + 3, 0) + g * (ls.length + 1)
-    const full = tabs.map((t) => t[2])
-    const short = tabs.map(([id, , l]) => SHORT[id] + l.slice(id.length))
-    const icons = tabs.map(([id], i) => (id === tab ? short[i] : ICON[id]))
-    let labels = icons
-    let gap = 1
-    for (const [ls, g] of [[full, 2], [full, 1], [short, 2], [short, 1], [icons, 2], [icons, 1]]) {
-      if (rowLen(ls, g) <= width) {
-        labels = ls
-        gap = g
-        break
-      }
-    }
-    const tabBar = Box({
+    // "‹ files · 3 ─────── ›". The rule gets exactly the columns left over, so
+    // it never squeezes the tab name; one column spare for wide glyphs.
+    const count = TAB_INFO[tab].count
+    const used = 1 + 1 + tab.length + (count ? 1 + 2 + count.length : 0) + 1 + 1 + 1 + 1
+    const header = Box({
       flexDirection: 'row',
-      columnGap: gap,
-      children: [arrow('tab-prev', '‹', 'app:diffFileListUp', -1)].concat(
-        tabs.map(([id, key], i) => [id, key, labels[i]]).map(([id, key, label]) =>
-        Button({
-          key: 'tab-' + id,
-          label,
-          hotkey: key,
-          plain: true,
-          dimColor: tab !== id,
-          onPress: () => {
-            tab = id
-            redraw()
-          },
-        }),
-        ),
-        [arrow('tab-next', '›', 'app:diffFileListDown', 1)],
-      ),
+      columnGap: 1,
+      children: [
+        arrow('tab-prev', '‹', 'app:diffFileListUp', -1),
+        pin(Text({ bold: true, children: [tab] })),
+        ...(count ? [pin(Text({ dimColor: true, children: ['· ' + count] }))] : []),
+        Text({ dimColor: true, children: ['─'.repeat(Math.max(1, inner - used))] }),
+        arrow('tab-next', '›', 'app:diffFileListDown', 1),
+      ],
     })
 
     const dim = (s) => Text({ dimColor: true, wrap: 'truncate', children: [s] })
@@ -1089,28 +1177,35 @@ export function register(on) {
       if (!files.size) body = [dim('// no files changed yet')]
       else {
         const list = [...files.entries()]
+        // "src/auth.ts            +12  -3"; pressing the path copies it
         body = list.slice(0, 12).map(([p, s], i) => {
           const stat = s.isNew ? 'new' : s.add || s.del ? '' : '±0'
+          const statLen = stat ? stat.length : String(s.add).length + String(s.del).length + 4
           return Box({
             key: 'file-' + i,
             flexDirection: 'row',
-            columnGap: 1,
+            columnGap: 2,
             children: [
-              Button({
-                key: 'copy-' + i,
-                label: '⧉',
-                plain: true,
-                onPress: async (pe) => {
-                  await $.ui.copy({ text: p, surface: pe.surface })
-                  $.ui.toast('[+] copied ' + baseName(p))
-                },
+              Box({
+                flexGrow: 1,
+                children: [
+                  Button({
+                    key: 'copy-' + i,
+                    label: clipStart(relPath(p), Math.max(8, inner - statLen - 2)),
+                    plain: true,
+                    onPress: async (pe) => {
+                      await $.ui.copy({ text: p, surface: pe.surface })
+                      $.ui.toast('[+] copied ' + baseName(p))
+                    },
+                  }),
+                ],
               }),
-              Text({ color: 'green', wrap: 'truncate-start', children: [clip(relPath(p), Math.max(8, width - (stat ? stat.length : String(s.add).length + String(s.del).length + 3) - 6))] }),
               stat
-                ? Text({ color: s.isNew ? 'cyan' : 'gray', children: [stat] })
+                ? pin(Text({ color: s.isNew ? 'cyan' : 'gray', children: [stat] }))
                 : Box({
                     flexDirection: 'row',
-                    columnGap: 1,
+                    flexShrink: 0,
+                    columnGap: 2,
                     children: [
                       Text({ color: 'green', children: ['+' + s.add] }),
                       Text({ color: 'red', children: ['-' + s.del] }),
@@ -1129,14 +1224,15 @@ export function register(on) {
         body = cmds.map((c, i) => {
           const mark = { run: '…', ok: '✓', fail: '✗', deny: '⊘' }[c.state]
           const tone = { run: 'yellow', ok: 'green', fail: 'red', deny: 'red' }[c.state]
+          // "✓  npm test                    14:02"
           return Box({
             key: 'cmd-' + i,
             flexDirection: 'row',
-            columnGap: 1,
+            columnGap: 2,
             children: [
-              Text({ color: tone, bold: true, children: [mark] }),
-              ...(narrow ? [] : [Text({ dimColor: true, children: [clock(c.at)] })]),
-              Text({ color: tone, wrap: 'truncate', children: [clip(c.cmd, Math.max(8, width - (narrow ? 4 : 14)))] }),
+              pin(Text({ color: tone, children: [mark] })),
+              Box({ flexGrow: 1, children: [Text({ ...(c.state === 'ok' ? {} : { color: tone }), wrap: 'truncate', children: [clip(c.cmd, inner)] })] }),
+              ...(narrow ? [] : [pin(Text({ dimColor: true, children: [clock(c.at).slice(0, 5)] }))]),
             ],
           })
         })
@@ -1240,37 +1336,79 @@ export function register(on) {
       }
     }
 
+    // Today's sessions from the journal, this one highlighted:
+    //   12:38–12:50 rai-mods (main) 12m
+    //     6 turns · 6 files · +73xp
+    if (tab === 'today') {
+      if (!journalDir) body = [dim('// journal off · /hud journal <dir> to log sessions')]
+      else if (!today.length) body = [dim('// no sessions logged today')]
+      else {
+        body = []
+        for (const s of today.slice(-8).reverse()) {
+          const mine = s.id === sessionId
+          body.push(
+            Box({
+              key: 'day-' + s.id,
+              flexDirection: 'row',
+              columnGap: 1,
+              children: [
+                pin(Text({ color: mine ? 'green' : 'gray', children: [mine ? '▸' : ' '] })),
+                pin(Text(mine ? { color: 'green', children: [s.time] } : { dimColor: true, children: [s.time] })),
+                Box({
+                  flexGrow: 1,
+                  children: [Text({ ...(mine ? { color: 'green', bold: true } : {}), wrap: 'truncate', children: [s.project] })],
+                }),
+                pin(Text({ dimColor: true, children: [s.span] })),
+              ],
+            }),
+          )
+          const bits = [s.turns + (s.turns === 1 ? ' turn' : ' turns')]
+          if (s.files) bits.push(s.files + (s.files === 1 ? ' file' : ' files'))
+          if (s.xp) bits.push('+' + s.xp + 'xp')
+          body.push(dim('    ' + bits.join(' · ')))
+        }
+        if (today.length > 8) body.push(dim('  +' + (today.length - 8) + ' earlier'))
+      }
+    }
+
     if (tab === 'ports') {
       if (!ports.length) body = [dim('// no dev servers listening')]
       else
         body = ports.slice(0, 12).map((pt, i) =>
+          // ":3000  node            vite / next"; pressing the port opens it
           Box({
             key: 'port-' + i,
             flexDirection: 'row',
-            columnGap: 1,
+            columnGap: 2,
             children: [
-              Button({
+              pin(Button({
                 key: 'open-' + pt.port,
-                label: '↗',
+                label: (':' + pt.port).padEnd(6),
                 plain: true,
                 onPress: () => openUrl($, 'http://localhost:' + pt.port),
-              }),
-              Text({ color: 'green', bold: true, children: [':' + pt.port] }),
-              Text({ color: 'cyan', wrap: 'truncate', children: [pt.name] }),
-              Text({ dimColor: true, wrap: 'truncate', children: [portHint(pt.port)] }),
+              })),
+              Box({ flexGrow: 1, children: [Text({ color: 'cyan', wrap: 'truncate', children: [pt.name] })] }),
+              pin(Text({ dimColor: true, children: [portHint(pt.port)] })),
             ],
           }),
         )
     }
 
+    // mascot · readout · tabs + header · the open tab, a blank line between each
     return Box({
       flexDirection: 'column',
       children: [
         ...(sprite ? [sprite] : []),
-        ...readout,
-        Text({ dimColor: true, children: ['─'.repeat(width)] }),
-        tabBar,
-        ...body,
+        Box({
+          flexDirection: 'column',
+          paddingLeft: PAD,
+          paddingRight: PAD,
+          children: [
+            Box({ flexDirection: 'column', marginTop: sprite ? 1 : 0, children: readout }),
+            Box({ flexDirection: 'column', marginTop: 1, children: [strip, header] }),
+            Box({ flexDirection: 'column', marginTop: 1, children: body }),
+          ],
+        }),
       ],
     })
   })
