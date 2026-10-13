@@ -40,7 +40,10 @@ function memoryNote(path) {
 // with nothing that would turn into a link or end the section. '' for slash
 // commands and empty prompts.
 export function summaryOf(text) {
-  const s = String(text || '').replace(/\s+/g, ' ').trim()
+  const s = String(text || '')
+    .replace(/<pasted_content[^>]*>[\s\S]*?<\/pasted_content[^>]*>/g, '[pasted]')
+    .replace(/\s+/g, ' ')
+    .trim()
   if (!s || s.startsWith('/')) return ''
   const safe = s.replace(/\[\[|\]\]/g, (b) => b[0]).replace(/<!--|-->/g, '')
   return safe.length > 100 ? safe.slice(0, 99).trimEnd() + '…' : safe
@@ -81,6 +84,16 @@ export function parseNote(text) {
     })
   }
   return out
+}
+
+// The "about" line a session already has in the note, so a resumed session
+// keeps what it started on. '' when there's none.
+export function aboutIn(text, id) {
+  const start = String(text || '').indexOf('<!-- rai:' + id + ' -->')
+  if (start < 0) return ''
+  const end = text.indexOf('<!-- /rai -->', start)
+  const m = /\n- about: ([^\r\n]*)/.exec(text.slice(start, end < 0 ? undefined : end))
+  return m ? m[1] : ''
 }
 
 // The markdown for one session, between its markers.

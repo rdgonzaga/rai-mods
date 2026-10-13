@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay, summaryOf } from '../hooks/journal.js'
+import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay, summaryOf, aboutIn } from '../hooks/journal.js'
 
 // ── journal.js units ───────────────────────────────────────────────────────
 
@@ -58,6 +58,15 @@ test('the first prompt becomes a one-line "about", safe for the note', () => {
   expect(long.length).toBe(100)
   expect(long.endsWith('…')).toBe(true)
   expect(formatSection({ ...DATA, summary: 'fix login' })).toContain('38m\n- about: fix login\n- 6 turns')
+  expect(summaryOf('the <pasted_content id="a1">\nlong\nlog\n</pasted_content id="a1"> fix it')).toBe('the [pasted] fix it')
+})
+
+test('a resumed session keeps the "about" it started with', () => {
+  const note = upsertSection('', 'abc', formatSection({ ...DATA, summary: 'first ask' }), 'd') + formatSection({ ...DATA, id: 'def', summary: 'other' })
+  expect(aboutIn(note, 'abc')).toBe('first ask')
+  expect(aboutIn(note, 'def')).toBe('other')
+  expect(aboutIn(note, 'zzz')).toBe('')
+  expect(aboutIn(upsertSection('', 'abc', formatSection(DATA), 'd'), 'abc')).toBe('')
 })
 
 test('names Obsidian cannot link, and no repo, stay plain text', () => {

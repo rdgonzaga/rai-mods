@@ -9,7 +9,7 @@
 import { dims, pixels, cellsOf, asSvg, scaleGrid, scaleFor, face } from './sprite.js'
 import { findSecret, envValues, isSecretHome, mask, parseWindowsPorts, parseLsofPorts, portHint } from './scan.js'
 import { clip, clipStart, baseName, relPathOf, tagFor, targetFor, detailFor, statusFor, groupSummary, verbFor, turnSummary } from './style.js'
-import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay, summaryOf } from './journal.js'
+import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay, summaryOf, aboutIn } from './journal.js'
 
 // ── Pane and mascot ────────────────────────────────────────────────────────
 const PANE = 'rai-hud'
@@ -531,7 +531,7 @@ async function writeJournal($) {
       endedAt: await $.clock.now(),
       project: baseName(repoRoot || sessionCwd),
       branch,
-      summary,
+      summary: aboutIn(before, sessionId) || summary,
       turns: turnsDone,
       tools: toolTotal,
       xp: xpEarned,
