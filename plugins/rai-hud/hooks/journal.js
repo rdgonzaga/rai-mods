@@ -28,6 +28,24 @@ function fileStat(s) {
   return s.add || s.del ? '+' + s.add + ' -' + s.del : 'edited'
 }
 
+// A Claude memory note's name ("project_x" for …/memory/project_x.md), which
+// the vault mirror keeps, so it can be a link. '' for anything else, and for
+// MEMORY.md, which every project has.
+function memoryNote(path) {
+  const m = /\/memory\/([^/]+)\.md$/i.exec(String(path).replace(/\\/g, '/'))
+  return m && m[1].toUpperCase() !== 'MEMORY' && !/[[\]|#^]/.test(m[1]) ? m[1] : ''
+}
+
+// A prompt as one line for the journal: whitespace collapsed, capped, and
+// with nothing that would turn into a link or end the section. '' for slash
+// commands and empty prompts.
+export function summaryOf(text) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!s || s.startsWith('/')) return ''
+  const safe = s.replace(/\[\[|\]\]/g, (b) => b[0]).replace(/<!--|-->/g, '')
+  return safe.length > 100 ? safe.slice(0, 99).trimEnd() + '…' : safe
+}
+
 // A file's name for the log: repo-relative inside the repo, else ~/… and
 // at most its last three parts
 export function logPath(abs, root, home) {
@@ -66,7 +84,7 @@ export function parseNote(text) {
 }
 
 // The markdown for one session, between its markers.
-// data: { id, startedAt, endedAt, project, branch, turns, tools, xp, level,
+// data: { id, startedAt, endedAt, project, branch, summary, turns, tools, xp, level,
 //         files: [[path, { add, del, isNew }]], cmds, cmdFails, guards: [{ kind, outcome }] }
 export function formatSection(data) {
   // The project as an Obsidian link, so a note named or aliased after the repo
@@ -77,6 +95,7 @@ export function formatSection(data) {
     '## ' + hhmm(data.startedAt) + '–' + hhmm(data.endedAt) + ' · ' + project +
     (data.branch ? ' (' + data.branch + ')' : '') + ' · ' + span(data.endedAt - data.startedAt)
   const lines = [head]
+  if (data.summary) lines.push('- about: ' + data.summary)
   let stats = data.turns + (data.turns === 1 ? ' turn' : ' turns') + ' · ' + data.tools + ' tools'
   if (data.xp) stats += ' · +' + data.xp + ' XP → LVL ' + data.level
   lines.push('- ' + stats)
@@ -88,7 +107,12 @@ export function formatSection(data) {
       add += s.add
       del += s.del
     }
-    const shown = files.slice(0, 10).map(([p, s]) => '`' + p + '` ' + fileStat(s))
+    // Memory notes first, as links, so the cap never hides them
+    const notes = files.filter(([p]) => memoryNote(p))
+    const rest = files.filter(([p]) => !memoryNote(p))
+    const shown = [...notes, ...rest]
+      .slice(0, 10)
+      .map(([p, s]) => (memoryNote(p) ? '[[' + memoryNote(p) + ']]' : '`' + p + '`') + ' ' + fileStat(s))
     if (files.length > 10) shown.push('+' + (files.length - 10) + ' more')
     lines.push('- files (' + files.length + ', +' + add + ' -' + del + '): ' + shown.join(', '))
   }

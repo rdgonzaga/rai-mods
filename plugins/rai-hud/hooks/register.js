@@ -9,7 +9,7 @@
 import { dims, pixels, cellsOf, asSvg, scaleGrid, scaleFor, face } from './sprite.js'
 import { findSecret, envValues, isSecretHome, mask, parseWindowsPorts, parseLsofPorts, portHint } from './scan.js'
 import { clip, clipStart, baseName, relPathOf, tagFor, targetFor, detailFor, statusFor, groupSummary, verbFor, turnSummary } from './style.js'
-import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay } from './journal.js'
+import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay, summaryOf } from './journal.js'
 
 // ── Pane and mascot ────────────────────────────────────────────────────────
 const PANE = 'rai-hud'
@@ -174,6 +174,8 @@ let today = []
 // This session's totals, for its journal section
 let sessionStartedAt = 0
 let turnsDone = 0
+// The session's first real prompt, one line, for the journal
+let summary = ''
 let toolTotal = 0
 let cmdTotal = 0
 let cmdFails = 0
@@ -506,6 +508,7 @@ function resetJournal(now) {
   sessionId = ''
   sessionStartedAt = now
   turnsDone = 0
+  summary = ''
   toolTotal = 0
   cmdTotal = 0
   cmdFails = 0
@@ -528,6 +531,7 @@ async function writeJournal($) {
       endedAt: await $.clock.now(),
       project: baseName(repoRoot || sessionCwd),
       branch,
+      summary,
       turns: turnsDone,
       tools: toolTotal,
       xp: xpEarned,
@@ -783,6 +787,8 @@ export function register(on) {
     toolCalls = 0
     turnFiles = new Set()
     target = ''
+    // A prompt with a secret in it never reaches the journal; the next one may
+    if (!summary && !findSecret(e.text, envSecrets)) summary = summaryOf(e.text)
     await setMood($, 'THINKING')
     return next(e)
   })

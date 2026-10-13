@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay } from '../hooks/journal.js'
+import { dayOf, formatSection, upsertSection, logPath, parseNote, prevDay, summaryOf } from '../hooks/journal.js'
 
 // ── journal.js units ───────────────────────────────────────────────────────
 
@@ -37,6 +37,27 @@ test('a session section lists turns, files, shell and guards', () => {
       '<!-- /rai -->',
     ].join('\n'),
   )
+})
+
+test('memory notes become links, listed first so the cap keeps them', () => {
+  const files = [
+    ...Array.from({ length: 11 }, (_, i) => ['f' + i + '.ts', { add: 1, del: 0, isNew: false }]),
+    ['~/…/x/memory/project_one_piece.md', { add: 0, del: 0, isNew: false }],
+    ['~/…/x/memory/MEMORY.md', { add: 0, del: 0, isNew: false }],
+  ]
+  const text = formatSection({ ...DATA, files })
+  expect(text).toContain('- files (13, +11 -0): [[project_one_piece]] edited, `f0.ts` +1 -0')
+  expect(text).not.toContain('[[MEMORY]]')
+})
+
+test('the first prompt becomes a one-line "about", safe for the note', () => {
+  expect(summaryOf('  fix the\n\nlogin   redirect ')).toBe('fix the login redirect')
+  expect(summaryOf('/clear')).toBe('')
+  expect(summaryOf('link [[x]] <!-- /rai -->')).toBe('link [x]  /rai ')
+  const long = summaryOf('a'.repeat(150))
+  expect(long.length).toBe(100)
+  expect(long.endsWith('…')).toBe(true)
+  expect(formatSection({ ...DATA, summary: 'fix login' })).toContain('38m\n- about: fix login\n- 6 turns')
 })
 
 test('names Obsidian cannot link, and no repo, stay plain text', () => {
@@ -124,8 +145,8 @@ function setup(on, { journalDir = 'C:/vault/Journal' } = {}) {
   return { files }
 }
 
-async function turn($, id: string) {
-  await $.turn.start({ text: 'go', turnId: id })
+async function turn($, id: string, text = 'go') {
+  await $.turn.start({ text, turnId: id })
   await $.tool.call({ tool: 'Bash', command: 'npm test' })
   await $.turn.complete({ turnId: id, answer: 'ok', durationMs: 1000, isAborted: false, reason: 'answer', usage: null })
 }
@@ -133,15 +154,19 @@ async function turn($, id: string) {
 test("each turn rewrites this session's section in the daily note", async ($, on) => {
   const { files } = setup(on)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: 'C:\\work' })
-  await turn($, 't1')
-  await turn($, 't2')
+  await turn($, 't1', 'use key sk-ant-api03-' + 'x'.repeat(90))
+  await turn($, 't2', 'fix the login redirect')
+  await turn($, 't3', 'and the logout one')
   expect(files.size).toBe(1)
+  // The first prompt without a secret, and only that one
+  expect([...files.values()][0]).toContain('- about: fix the login redirect\n')
+  expect([...files.values()][0]).not.toContain('sk-ant')
   const [path, text] = [...files.entries()][0]
   // The day comes from the mock clock; the harness may hand back backslashes
   expect(path).toMatch(/^C:[\\/]vault[\\/]Journal[\\/]\d{4}-\d{2}-\d{2}\.md$/)
   expect(text.match(/<!-- rai:sess-1 -->/g)).toHaveLength(1)
-  expect(text).toContain('- 2 turns · 2 tools')
-  expect(text).toContain('- shell: 2 run')
+  expect(text).toContain('- 3 turns · 3 tools')
+  expect(text).toContain('- shell: 3 run')
 })
 
 const PANE = {

@@ -59,13 +59,14 @@ Both skip `claude -p` runs, so scripts never hang on a dialog. `/hud guard off` 
 
 ```md
 ## 14:32–15:10 · [[rai-mods]] (main) · 38m
+- about: add a session journal to the hud
 - 6 turns · 41 tools · +212 XP → LVL 4
 - files (3, +134 -14): `hooks/register.js` +120 -14, `hooks/journal.js` new, …
 - shell: 18 run, 2 failed
 - guards: push ✓ allowed, secret ⊘ denied
 ```
 
-The project links to a note with the repo's name (or an `aliases:` entry for it), and each new day links back to the previous one, so the notes join the rest of the vault's graph. The section is rewritten after every turn, so a crash still leaves the log, and parallel sessions each keep their own. The **today** tab reads it back. It's off until you set a folder; `/hud journal off` stops it. Scripts and sessions with no turns write nothing.
+"about" is the session's first prompt, cut to one line (skipped if it holds a secret). The project links to a note with the repo's name (or an `aliases:` entry for it), edited Claude memory notes link to their mirrored copies, and each new day links back to the previous one, so the notes join the rest of the vault's graph. The section is rewritten after every turn, so a crash still leaves the log, and parallel sessions each keep their own. The **today** tab reads it back. It's off until you set a folder; `/hud journal off` stops it. Scripts and sessions with no turns write nothing.
 
 **Sounds.** A soft chime when a 15s+ turn finishes, two gentle pulses on guard prompts, an arpeggio on level up. On Windows they play through PowerShell, since `$.audio` has no player there. Regenerate them with `python sounds/make_sounds.py`.
 
